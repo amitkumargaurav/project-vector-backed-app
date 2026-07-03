@@ -1,0 +1,558 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GoalStatus {
+  draft
+  active
+  paused
+  completed
+  archived
+  abandoned
+}
+
+enum TrackStatus {
+  active
+  paused
+  completed
+  archived
+}
+
+enum TaskStatus {
+  pending
+  in_progress
+  completed
+  skipped
+  missed
+  rescheduled
+  cancelled
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+  critical
+}
+
+enum TaskDifficulty {
+  easy
+  medium
+  hard
+}
+
+enum DeadlineType {
+  fixed
+  flexible
+}
+
+enum PeriodType {
+  daily
+  weekly
+  monthly
+}
+
+enum DataType {
+  actual
+  partial
+  projected
+  provisional
+}
+
+enum RiskLevel {
+  low
+  moderate
+  high
+}
+
+enum ClientActionStatus {
+  accepted
+  rejected
+  duplicate
+}
+
+enum NotificationStatus {
+  scheduled
+  sent
+  read
+  clicked
+  failed
+  cancelled
+}
+
+enum SuggestionStatus {
+  pending
+  accepted
+  rejected
+  expired
+}
+
+model User {
+  id              String           @id @default(uuid())
+  email           String           @unique
+  googleSub       String?          @unique
+  displayName     String?
+  avatarUrl       String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  deletedAt       DateTime?
+  profile         UserProfile?
+  devices         Device[]
+  sessions        Session[]
+  goals           Goal[]
+  progressEvents  ProgressEvent[]
+  analytics       AnalyticsSnapshot[]
+  probabilities   ProbabilitySnapshot[]
+  clientActions   ClientActionLog[]
+  syncChanges     SyncChangeLog[]
+  syncStates      SyncState[]
+  notifications   Notification[]
+  preferences     NotificationPreference?
+  privacySettings PrivacySetting?
+  subscription     Subscription?
+  auditLogs       AuditLog[]
+}
+
+model UserProfile {
+  id                         String   @id @default(uuid())
+  userId                     String   @unique
+  timezone                   String   @default("UTC")
+  language                   String   @default("en")
+  availableMinutesPerDay     Int      @default(60)
+  onboardingCompleted        Boolean  @default(false)
+  preferencesJson            Json     @default("{}")
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  user                       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Device {
+  id                     String    @id @default(uuid())
+  userId                 String
+  platform               String
+  deviceName             String?
+  fcmToken               String?
+  timezone               String    @default("UTC")
+  appVersion             String?
+  osVersion              String?
+  notificationPermission String    @default("unknown")
+  isActive               Boolean   @default(true)
+  lastSeenAt             DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  deletedAt              DateTime?
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  syncStates             SyncState[]
+
+  @@index([userId])
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  userId       String
+  refreshHash  String
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Goal {
+  id               String                @id @default(uuid())
+  userId           String
+  title            String
+  category         String?
+  deadline         DateTime?
+  overallProgress  Float                 @default(0)
+  status           GoalStatus            @default(draft)
+  activeSince      DateTime?
+  syncRevision     BigInt                @default(0)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  deletedAt        DateTime?
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tracks           GoalTrack[]
+  tasks            Task[]
+  roadmapVersions  RoadmapVersion[]
+  reviewsDaily     ReviewDaily[]
+  reviewsWeekly    ReviewWeekly[]
+  reviewsMonthly   ReviewMonthly[]
+  analytics        AnalyticsSnapshot[]
+  probabilities    ProbabilitySnapshot[]
+  planAdjustments  PlanAdjustment[]
+  aiSuggestions    AISuggestion[]
+
+  @@index([userId, status])
+}
+
+model GoalTrack {
+  id             String      @id @default(uuid())
+  goalId         String
+  name           String
+  type           String?
+  targetDate     DateTime?
+  progress       Float       @default(0)
+  progressWeight Float       @default(1)
+  status         TrackStatus @default(active)
+  syncRevision   BigInt      @default(0)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  deletedAt      DateTime?
+  goal           Goal        @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  tasks          Task[]
+
+  @@index([goalId, status])
+}
+
+model RoadmapVersion {
+  id          String   @id @default(uuid())
+  goalId      String
+  version     Int
+  status      String   @default("draft")
+  planJson    Json
+  generatedBy String   @default("system")
+  createdAt   DateTime @default(now())
+  acceptedAt  DateTime?
+  goal        Goal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  milestones  Milestone[]
+  dailyPlans  DailyPlan[]
+
+  @@unique([goalId, version])
+}
+
+model Milestone {
+  id               String         @id @default(uuid())
+  roadmapVersionId String
+  title            String
+  targetDate       DateTime?
+  sortOrder        Int            @default(0)
+  metadataJson     Json           @default("{}")
+  roadmapVersion   RoadmapVersion @relation(fields: [roadmapVersionId], references: [id], onDelete: Cascade)
+}
+
+model DailyPlan {
+  id               String         @id @default(uuid())
+  roadmapVersionId String?
+  goalId           String
+  planDate         DateTime
+  plannedMinutes   Int            @default(0)
+  metadataJson     Json           @default("{}")
+  roadmapVersion   RoadmapVersion? @relation(fields: [roadmapVersionId], references: [id], onDelete: SetNull)
+  tasks            Task[]
+
+  @@index([goalId, planDate])
+}
+
+model Task {
+  id                 String           @id @default(uuid())
+  goalId             String
+  trackId            String?
+  dailyPlanId        String?
+  title              String
+  description        String?
+  taskType           String           @default("study")
+  estimatedMinutes   Int              @default(0)
+  scheduledDate      DateTime?
+  scheduledStartTime String?
+  priority           TaskPriority     @default(medium)
+  difficulty         TaskDifficulty   @default(medium)
+  deadlineType       DeadlineType     @default(flexible)
+  status             TaskStatus       @default(pending)
+  parentTaskId       String?
+  clientActionId     String?
+  syncRevision       BigInt           @default(0)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  skippedAt          DateTime?
+  missedAt           DateTime?
+  deletedAt          DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  goal               Goal             @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  track              GoalTrack?       @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  dailyPlan          DailyPlan?       @relation(fields: [dailyPlanId], references: [id], onDelete: SetNull)
+  parentTask         Task?            @relation("TaskParent", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  childTasks         Task[]           @relation("TaskParent")
+  dependencies       TaskDependency[] @relation("TaskDependencyTask")
+  dependents         TaskDependency[] @relation("TaskDependencyDependsOn")
+  progressEvents     ProgressEvent[]
+
+  @@index([goalId, scheduledDate])
+  @@index([trackId])
+  @@index([clientActionId])
+}
+
+model TaskDependency {
+  id              String @id @default(uuid())
+  taskId          String
+  dependsOnTaskId String
+  task            Task   @relation("TaskDependencyTask", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOnTask   Task   @relation("TaskDependencyDependsOn", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnTaskId])
+}
+
+model ProgressEvent {
+  id             String   @id @default(uuid())
+  userId         String
+  goalId         String?
+  trackId        String?
+  taskId         String?
+  eventType      String
+  eventDate      DateTime
+  clientEventId  String?
+  clientActionId String?
+  payloadJson    Json     @default("{}")
+  syncRevision   BigInt   @default(0)
+  createdAt      DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task           Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, clientEventId])
+  @@index([userId, eventDate])
+  @@index([goalId, eventDate])
+}
+
+model ReviewDaily {
+  id          String   @id @default(uuid())
+  userId      String
+  goalId      String?
+  reviewDate  DateTime
+  energyLevel Int?
+  mood        String?
+  notes       String?
+  answersJson Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  goal        Goal?    @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, reviewDate])
+}
+
+model ReviewWeekly {
+  id          String   @id @default(uuid())
+  userId      String
+  goalId      String?
+  weekLabel   String
+  summary     String?
+  answersJson Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  goal        Goal?    @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, weekLabel])
+}
+
+model ReviewMonthly {
+  id          String   @id @default(uuid())
+  userId      String
+  goalId      String?
+  monthLabel  String
+  summary     String?
+  answersJson Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  goal        Goal?    @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, monthLabel])
+}
+
+model AnalyticsSnapshot {
+  id                    String     @id @default(uuid())
+  userId                String
+  goalId                String?
+  periodType            PeriodType
+  periodStart           DateTime
+  periodEnd             DateTime
+  plannedTaskCount      Int        @default(0)
+  completedTaskCount    Int        @default(0)
+  skippedTaskCount      Int        @default(0)
+  missedTaskCount       Int        @default(0)
+  completionPercentage  Float?
+  probabilityPercentage Float?
+  consistencyScore      Float?
+  plannedMinutes        Int        @default(0)
+  completedMinutes      Int        @default(0)
+  trackBreakdownJson    Json       @default("{}")
+  riskLevel             RiskLevel  @default(low)
+  dataType              DataType   @default(actual)
+  isFinal               Boolean    @default(false)
+  syncRevision          BigInt     @default(0)
+  calculatedAt          DateTime   @default(now())
+  user                  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal                  Goal?      @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, goalId, periodType, periodStart])
+  @@index([userId, periodType, periodStart])
+}
+
+model ProbabilitySnapshot {
+  id                    String     @id @default(uuid())
+  userId                String
+  goalId                String
+  periodType            PeriodType
+  periodStart           DateTime
+  periodEnd             DateTime
+  probabilityPercentage Float
+  riskLevel             RiskLevel  @default(low)
+  formulaVersion        String     @default("phase0-v1")
+  inputsJson            Json       @default("{}")
+  dataType              DataType   @default(actual)
+  syncRevision          BigInt     @default(0)
+  calculatedAt          DateTime   @default(now())
+  user                  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal                  Goal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([userId, goalId, periodStart])
+}
+
+model PlanAdjustment {
+  id             String           @id @default(uuid())
+  goalId         String
+  suggestionType String
+  reason         String
+  proposedJson   Json
+  status         SuggestionStatus @default(pending)
+  createdAt      DateTime         @default(now())
+  decidedAt      DateTime?
+  goal           Goal             @relation(fields: [goalId], references: [id], onDelete: Cascade)
+}
+
+model AISuggestion {
+  id                   String           @id @default(uuid())
+  goalId               String?
+  userId               String
+  suggestionType       String
+  promptVersion        String
+  inputJson            Json             @default("{}")
+  outputJson           Json             @default("{}")
+  confidence           Float?
+  requiresUserApproval Boolean          @default(true)
+  status               SuggestionStatus @default(pending)
+  createdAt            DateTime         @default(now())
+  decidedAt            DateTime?
+  goal                 Goal?            @relation(fields: [goalId], references: [id], onDelete: SetNull)
+}
+
+model Notification {
+  id          String             @id @default(uuid())
+  userId      String
+  deviceId    String?
+  type        String
+  title       String
+  body        String
+  payloadJson Json               @default("{}")
+  status      NotificationStatus @default(scheduled)
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  readAt      DateTime?
+  clickedAt   DateTime?
+  failedAt    DateTime?
+  createdAt   DateTime           @default(now())
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, scheduledAt])
+}
+
+model NotificationPreference {
+  id                         String   @id @default(uuid())
+  userId                     String   @unique
+  notificationEnabled        Boolean  @default(true)
+  morningReminderTime        String?
+  eveningReviewTime          String?
+  quietHoursStart            String?
+  quietHoursEnd              String?
+  maxNotificationsPerDay     Int      @default(3)
+  intelligentNudgesEnabled   Boolean  @default(true)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  user                       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Subscription {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  tier           String   @default("free")
+  status         String   @default("active")
+  currentPeriodEnd DateTime?
+  featureFlagsJson Json   @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PrivacySetting {
+  id                         String   @id @default(uuid())
+  userId                     String   @unique
+  sensitiveGoalModeEnabled   Boolean  @default(false)
+  aiDataSharingEnabled       Boolean  @default(false)
+  analyticsSharingEnabled    Boolean  @default(false)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  user                       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ClientActionLog {
+  id             String             @id @default(uuid())
+  userId         String
+  clientActionId String
+  actionType     String
+  status         ClientActionStatus
+  reason         String?
+  resultJson     Json               @default("{}")
+  syncRevision   BigInt             @default(0)
+  createdAt      DateTime           @default(now())
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clientActionId])
+  @@index([userId, syncRevision])
+}
+
+model SyncChangeLog {
+  revision   BigInt   @id @default(autoincrement())
+  userId     String
+  entityType String
+  entityId   String
+  action     String
+  payloadJson Json    @default("{}")
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revision])
+}
+
+model SyncState {
+  id              String   @id @default(uuid())
+  userId          String
+  deviceId        String?
+  lastPulledRevision BigInt @default(0)
+  lastPushedAt    DateTime?
+  diagnosticsJson Json     @default("{}")
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device          Device?  @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, deviceId])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  action      String
+  entityType  String?
+  entityId    String?
+  metadataJson Json    @default("{}")
+  createdAt   DateTime @default(now())
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+}
