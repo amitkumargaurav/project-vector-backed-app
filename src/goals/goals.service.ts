@@ -81,13 +81,15 @@ export class GoalsService {
 
   async createTrack(userId: string, goalId: string, dto: CreateTrackDto) {
     await this.assertGoalOwner(userId, goalId);
+    const progressWeight = dto.progressWeight ?? 1;
+    await this.assertTrackWeightBudget(goalId, progressWeight);
     const track = await this.prisma.goalTrack.create({
       data: {
         goalId,
         name: dto.name,
         type: dto.type,
         targetDate: dto.targetDate ? new Date(dto.targetDate) : undefined,
-        progressWeight: dto.progressWeight ?? 1,
+        progressWeight,
       },
     });
     await this.revisions.record(userId, 'goal_track', track.id, 'create', track as unknown as Prisma.InputJsonValue);
@@ -105,7 +107,8 @@ export class GoalsService {
   }
 
   async updateTrack(userId: string, trackId: string, dto: UpdateTrackDto) {
-    await this.assertTrackOwner(userId, trackId);
+    const existing = await this.assertTrackOwner(userId, trackId);
+    if (dto.progressWeight !== undefined) await this.assertTrackWeightBudget(existing.goalId, dto.progressWeight, trackId);
     const track = await this.prisma.goalTrack.update({
       where: { id: trackId },
       data: {
@@ -146,5 +149,13 @@ export class GoalsService {
     if (!track || track.deletedAt) throw new NotFoundException('Track not found.');
     if (track.goal.userId !== userId) throw new ForbiddenException('Track does not belong to the current user.');
     return track;
+  }
+
+  private async assertTrackWeightBudget(goalId: string, progressWeight: number, excludeTrackId?: string) {
+    const tracks = await this.prisma.goalTrack.findMany({
+      where: { goalId, deletedAt: null, id: excludeTrackId ? { not: excludeTrackId } : undefined },
+    });
+    const total = tracks.reduce((sum, track) => sum + track.progressWeight, 0) + progressWeight;
+    if (total > 100) throw new BadRequestException('Active track progress weights cannot exceed 100 for a goal.');
   }
 }

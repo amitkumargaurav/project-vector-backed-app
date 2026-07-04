@@ -1,8 +1,10 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SyncRevisionService } from '../common/sync-revision.service';
+import { formatDateOnly } from '../common/date-utils';
 import { GoalsService } from '../goals/goals.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WorkerService } from '../worker/worker.service';
 import { CreateEventDto } from './dto';
 
 @Injectable()
@@ -11,6 +13,7 @@ export class EventsService {
     private readonly prisma: PrismaService,
     private readonly goals: GoalsService,
     private readonly revisions: SyncRevisionService,
+    private readonly worker: WorkerService,
   ) {}
 
   async create(userId: string, dto: CreateEventDto) {
@@ -35,6 +38,8 @@ export class EventsService {
       },
     });
     await this.revisions.record(userId, 'progress_event', event.id, 'create', event as unknown as Prisma.InputJsonValue);
+    await this.worker.enqueueSnapshotRecalculation(userId, formatDateOnly(event.eventDate), formatDateOnly(event.eventDate));
+    if (event.goalId) await this.worker.enqueueProbabilityUpdate(userId, event.goalId);
     return event;
   }
 

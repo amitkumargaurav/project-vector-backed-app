@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { addDays, parseDateOnly } from '../common/date-utils';
 import { EventsService } from '../events/events.service';
+import { GoalsService } from '../goals/goals.service';
+import { HistoryService } from '../history/history.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ReviewsService } from '../reviews/reviews.service';
 import { TasksService } from '../tasks/tasks.service';
 import { SyncActionDto, SyncPushDto } from './dto';
 
@@ -13,6 +16,9 @@ export class SyncService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly events: EventsService,
+    private readonly goals: GoalsService,
+    private readonly history: HistoryService,
+    private readonly reviews: ReviewsService,
     private readonly tasks: TasksService,
   ) {}
 
@@ -100,6 +106,83 @@ export class SyncService {
 
   private dispatch(userId: string, action: SyncActionDto) {
     const payload = action.payload;
+    if (action.actionType === 'goal.create') {
+      return this.goals.createGoal(userId, {
+        title: String(payload.title),
+        category: payload.category ? String(payload.category) : undefined,
+        deadline: payload.deadline ? String(payload.deadline) : undefined,
+      });
+    }
+    if (action.actionType === 'goal.update') {
+      return this.goals.updateGoal(userId, String(payload.goalId), {
+        title: payload.title ? String(payload.title) : undefined,
+        category: payload.category ? String(payload.category) : undefined,
+        deadline: payload.deadline ? String(payload.deadline) : undefined,
+        status: payload.status as never,
+      });
+    }
+    if (action.actionType === 'goal.status') {
+      return this.goals.setGoalStatus(userId, String(payload.goalId), payload.status as never);
+    }
+    if (action.actionType === 'goal.delete') {
+      return this.goals.deleteGoal(userId, String(payload.goalId));
+    }
+    if (action.actionType === 'track.create') {
+      return this.goals.createTrack(userId, String(payload.goalId), {
+        name: String(payload.name),
+        type: payload.type ? String(payload.type) : undefined,
+        targetDate: payload.targetDate ? String(payload.targetDate) : undefined,
+        progressWeight: payload.progressWeight === undefined ? undefined : Number(payload.progressWeight),
+      });
+    }
+    if (action.actionType === 'track.update') {
+      return this.goals.updateTrack(userId, String(payload.trackId), {
+        name: payload.name ? String(payload.name) : undefined,
+        type: payload.type ? String(payload.type) : undefined,
+        targetDate: payload.targetDate ? String(payload.targetDate) : undefined,
+        progressWeight: payload.progressWeight === undefined ? undefined : Number(payload.progressWeight),
+        status: payload.status as never,
+      });
+    }
+    if (action.actionType === 'track.status') {
+      return this.goals.setTrackStatus(userId, String(payload.trackId), payload.status as never);
+    }
+    if (action.actionType === 'track.delete') {
+      return this.goals.deleteTrack(userId, String(payload.trackId));
+    }
+    if (action.actionType === 'task.create') {
+      return this.tasks.create(userId, {
+        goalId: String(payload.goalId),
+        trackId: payload.trackId ? String(payload.trackId) : undefined,
+        title: String(payload.title),
+        description: payload.description ? String(payload.description) : undefined,
+        taskType: payload.taskType ? String(payload.taskType) : undefined,
+        estimatedMinutes: payload.estimatedMinutes === undefined ? undefined : Number(payload.estimatedMinutes),
+        scheduledDate: payload.scheduledDate ? String(payload.scheduledDate) : undefined,
+        scheduledStartTime: payload.scheduledStartTime ? String(payload.scheduledStartTime) : undefined,
+        priority: payload.priority as never,
+        difficulty: payload.difficulty as never,
+        deadlineType: payload.deadlineType as never,
+        dependsOnTaskIds: Array.isArray(payload.dependsOnTaskIds) ? payload.dependsOnTaskIds.map(String) : undefined,
+        parentTaskId: payload.parentTaskId ? String(payload.parentTaskId) : undefined,
+        clientActionId: action.clientActionId,
+      });
+    }
+    if (action.actionType === 'task.update') {
+      return this.tasks.update(userId, String(payload.taskId), {
+        trackId: payload.trackId ? String(payload.trackId) : undefined,
+        title: payload.title ? String(payload.title) : undefined,
+        description: payload.description ? String(payload.description) : undefined,
+        taskType: payload.taskType ? String(payload.taskType) : undefined,
+        estimatedMinutes: payload.estimatedMinutes === undefined ? undefined : Number(payload.estimatedMinutes),
+        scheduledDate: payload.scheduledDate ? String(payload.scheduledDate) : undefined,
+        scheduledStartTime: payload.scheduledStartTime ? String(payload.scheduledStartTime) : undefined,
+        priority: payload.priority as never,
+        difficulty: payload.difficulty as never,
+        deadlineType: payload.deadlineType as never,
+        status: payload.status as never,
+      });
+    }
     if (action.actionType === 'event.create') {
       return this.events.create(userId, {
         eventType: String(payload.eventType),
@@ -111,6 +194,24 @@ export class SyncService {
         clientActionId: action.clientActionId,
         payloadJson: (payload.payloadJson as Record<string, unknown>) ?? {},
       });
+    }
+    if (action.actionType === 'history.event.append') {
+      return this.history.appendDayEvent(userId, String(payload.date), String(payload.eventType), (payload.payloadJson as Record<string, unknown>) ?? {});
+    }
+    if (action.actionType === 'history.review.upsert') {
+      return this.history.review(userId, String(payload.date), {
+        mood: payload.mood ? String(payload.mood) : undefined,
+        answersJson: (payload.answersJson as Record<string, unknown>) ?? {},
+      });
+    }
+    if (action.actionType === 'review.daily.upsert') {
+      return this.reviews.upsertDaily(userId, payload);
+    }
+    if (action.actionType === 'review.weekly.upsert') {
+      return this.reviews.upsertWeekly(userId, payload);
+    }
+    if (action.actionType === 'review.monthly.upsert') {
+      return this.reviews.upsertMonthly(userId, payload);
     }
     if (['task.start', 'task.complete', 'task.skip', 'task.undo'].includes(action.actionType)) {
       const taskId = String(payload.taskId);

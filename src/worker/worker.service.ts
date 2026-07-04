@@ -18,4 +18,8 @@ export class WorkerService {
   enqueueNotification(notificationId: string) {
     return this.queue.add('notification.send', { notificationId });
   }
+
+  enqueueAISuggestion(suggestionId: string) {
+    return this.queue.add('ai.suggestion.generate', { suggestionId });
+  }
 }

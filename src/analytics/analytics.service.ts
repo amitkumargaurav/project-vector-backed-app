@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DataType, PeriodType, RiskLevel } from '@prisma/client';
+import { DataType, PeriodType, Prisma, RiskLevel } from '@prisma/client';
 import { addDays, endOfDate, formatDateOnly, parseDateOnly, startOfMonth, startOfWeek } from '../common/date-utils';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -27,10 +27,16 @@ export class AnalyticsService {
   async probability(userId: string) {
     const activeGoal = await this.prisma.goal.findFirst({ where: { userId, status: 'active', deletedAt: null } });
     if (!activeGoal) return { probability_percentage: null, risk_level: 'low' };
-    const rows = await this.dailyRows(userId, addDays(new Date(), -13), new Date());
-    const completion = rows.length ? rows.reduce((sum, row) => sum + (row.completion_percentage ?? 0), 0) / rows.length : 0;
-    const missed = rows.reduce((sum, row) => sum + row.missed_task_count, 0);
-    const probability = Math.max(5, Math.min(95, Math.round(50 + completion * 0.4 - missed * 2)));
+    const today = parseDateOnly(new Date().toISOString().slice(0, 10));
+    const snapshot = await this.prisma.probabilitySnapshot.findFirst({
+      where: { userId, goalId: activeGoal.id, periodType: 'daily', periodStart: today },
+      orderBy: { calculatedAt: 'desc' },
+    });
+    if (snapshot) {
+      return { goal_id: activeGoal.id, probability_percentage: snapshot.probabilityPercentage, risk_level: snapshot.riskLevel };
+    }
+    const { probability } = await this.calculateProbability(userId, activeGoal.id, today);
+    await this.persistProbabilitySnapshot(userId, activeGoal.id, today);
     return { goal_id: activeGoal.id, probability_percentage: probability, risk_level: this.riskFromProbability(probability) };
   }
 
@@ -82,6 +88,73 @@ export class AnalyticsService {
     return rows;
   }
 
+  async recalculateDailySnapshots(userId: string, from: Date, to: Date) {
+    const rows = [];
+    const activeGoal = await this.prisma.goal.findFirst({ where: { userId, status: 'active', deletedAt: null } });
+    const syncRevision = await this.latestRevision(userId);
+    for (let cursor = parseDateOnly(formatDateOnly(from)); cursor <= to; cursor = addDays(cursor, 1)) {
+      const row = await this.calculateAggregateRow(userId, 'daily', cursor, endOfDate(cursor));
+      const existing = await this.prisma.analyticsSnapshot.findFirst({
+        where: { userId, goalId: activeGoal?.id, periodType: 'daily', periodStart: cursor },
+      });
+      const snapshot = existing
+        ? await this.prisma.analyticsSnapshot.update({
+            where: { id: existing.id },
+            data: this.snapshotUpdateData(row, syncRevision),
+          })
+        : await this.prisma.analyticsSnapshot.create({
+            data: {
+              ...this.snapshotCreateData(row, syncRevision),
+              userId,
+              goalId: activeGoal?.id,
+              periodType: 'daily',
+              periodStart: cursor,
+              periodEnd: endOfDate(cursor),
+            },
+          });
+      rows.push(this.serializeSnapshot(snapshot));
+    }
+    return rows;
+  }
+
+  async persistProbabilitySnapshot(userId: string, goalId: string, periodStart = parseDateOnly(new Date().toISOString().slice(0, 10)), triggerAdjustment = false) {
+    const previous = await this.prisma.probabilitySnapshot.findFirst({
+      where: { userId, goalId },
+      orderBy: { calculatedAt: 'desc' },
+    });
+    const { probability, rows, missed, completion } = await this.calculateProbability(userId, goalId, periodStart);
+    const snapshot = await this.prisma.probabilitySnapshot.create({
+      data: {
+        userId,
+        goalId,
+        periodType: 'daily',
+        periodStart,
+        periodEnd: endOfDate(periodStart),
+        probabilityPercentage: probability,
+        riskLevel: this.riskFromProbability(probability),
+        inputsJson: { windowDays: rows.length, averageCompletion: completion, missedTaskCount: missed } as Prisma.InputJsonValue,
+        dataType: periodStart > parseDateOnly(new Date().toISOString().slice(0, 10)) ? 'projected' : 'actual',
+        syncRevision: await this.latestRevision(userId),
+      },
+    });
+    if (triggerAdjustment && previous && probability < previous.probabilityPercentage) {
+      await this.prisma.planAdjustment.create({
+        data: {
+          goalId,
+          suggestionType: 'probability_drop',
+          reason: `Success probability dropped from ${previous.probabilityPercentage}% to ${probability}% after a progress update.`,
+          proposedJson: {
+            previous_probability_percentage: previous.probabilityPercentage,
+            current_probability_percentage: probability,
+            trigger: 'progress_update',
+            recommendation: 'Generate an AI-assisted plan adjustment for user approval.',
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }
+    return snapshot;
+  }
+
   private async weeklyRows(userId: string, from: Date, to: Date) {
     const rows = [];
     for (let cursor = startOfWeek(from); cursor <= to; cursor = addDays(cursor, 7)) {
@@ -108,6 +181,10 @@ export class AnalyticsService {
     if (snapshot) {
       return this.serializeSnapshot(snapshot);
     }
+    return this.calculateAggregateRow(userId, periodType, start, end);
+  }
+
+  private async calculateAggregateRow(userId: string, periodType: PeriodType, start: Date, end: Date) {
     const tasks = await this.prisma.task.findMany({
       where: { goal: { userId }, deletedAt: null, scheduledDate: { gte: start, lte: end } },
       include: { track: true },
@@ -138,6 +215,60 @@ export class AnalyticsService {
       data_type: dataType,
       sync_revision: '0',
     };
+  }
+
+  private async calculateProbability(userId: string, goalId: string, periodStart: Date) {
+    const rows = await this.dailyRows(userId, addDays(periodStart, -13), periodStart);
+    const completion = rows.length ? rows.reduce((sum, row) => sum + (row.completion_percentage ?? 0), 0) / rows.length : 0;
+    const missed = rows.reduce((sum, row) => sum + row.missed_task_count, 0);
+    const probability = Math.max(5, Math.min(95, Math.round(50 + completion * 0.4 - missed * 2)));
+    return { goalId, probability, rows, completion, missed };
+  }
+
+  private snapshotUpdateData(
+    row: Awaited<ReturnType<AnalyticsService['calculateAggregateRow']>>,
+    syncRevision: bigint,
+  ): Prisma.AnalyticsSnapshotUncheckedUpdateInput {
+    return {
+      periodEnd: parseDateOnly(row.period_end),
+      plannedTaskCount: row.planned_task_count,
+      completedTaskCount: row.completed_task_count,
+      skippedTaskCount: row.skipped_task_count,
+      missedTaskCount: row.missed_task_count,
+      completionPercentage: row.completion_percentage,
+      probabilityPercentage: row.probability_percentage,
+      plannedMinutes: row.planned_minutes,
+      completedMinutes: row.completed_minutes,
+      riskLevel: row.risk_level,
+      dataType: row.data_type,
+      syncRevision,
+      calculatedAt: new Date(),
+    };
+  }
+
+  private snapshotCreateData(
+    row: Awaited<ReturnType<AnalyticsService['calculateAggregateRow']>>,
+    syncRevision: bigint,
+  ): Omit<Prisma.AnalyticsSnapshotUncheckedCreateInput, 'userId' | 'goalId' | 'periodType' | 'periodStart' | 'periodEnd'> {
+    return {
+      plannedTaskCount: row.planned_task_count,
+      completedTaskCount: row.completed_task_count,
+      skippedTaskCount: row.skipped_task_count,
+      missedTaskCount: row.missed_task_count,
+      completionPercentage: row.completion_percentage,
+      probabilityPercentage: row.probability_percentage,
+      plannedMinutes: row.planned_minutes,
+      completedMinutes: row.completed_minutes,
+      riskLevel: row.risk_level,
+      dataType: row.data_type,
+      syncRevision,
+      calculatedAt: new Date(),
+    };
+  }
+
+  private async latestRevision(userId: string) {
+    const latest = await this.prisma.syncChangeLog.findFirst({ where: { userId }, orderBy: { revision: 'desc' } });
+    return latest?.revision ?? 0n;
   }
 
   private serializeSnapshot(snapshot: {

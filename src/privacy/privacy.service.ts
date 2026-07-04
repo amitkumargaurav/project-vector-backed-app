@@ -9,19 +9,42 @@ export class PrivacyService {
     private readonly revisions: SyncRevisionService,
   ) {}
 
-  exportUser(userId: string) {
-    return this.prisma.user.findUnique({
+  async exportUser(userId: string) {
+    const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: {
         profile: true,
-        goals: { include: { tracks: true, tasks: true, roadmapVersions: true } },
+        devices: true,
+        goals: {
+          include: {
+            tracks: true,
+            tasks: { include: { dependencies: true } },
+            roadmapVersions: { include: { milestones: true, dailyPlans: true } },
+            reviewsDaily: true,
+            reviewsWeekly: true,
+            reviewsMonthly: true,
+            planAdjustments: true,
+            aiSuggestions: true,
+          },
+        },
         progressEvents: true,
         analytics: true,
         probabilities: true,
+        clientActions: true,
+        syncChanges: true,
+        syncStates: true,
         notifications: true,
+        preferences: true,
         privacySettings: true,
+        subscription: true,
+        auditLogs: true,
       },
     });
+    return {
+      format: 'json',
+      exported_at: new Date().toISOString(),
+      user,
+    };
   }
 
   async requestDeleteAccount(userId: string) {
@@ -29,8 +52,17 @@ export class PrivacyService {
   }
 
   async confirmDeleteAccount(userId: string) {
+    const now = new Date();
     await this.prisma.auditLog.create({ data: { userId, action: 'delete_account_confirmed' } });
-    return this.prisma.user.update({ where: { id: userId }, data: { deletedAt: new Date() } });
+    return this.prisma.$transaction(async (tx) => {
+      await tx.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: now } });
+      await tx.device.updateMany({ where: { userId, deletedAt: null }, data: { isActive: false, deletedAt: now } });
+      await tx.goal.updateMany({ where: { userId, deletedAt: null }, data: { deletedAt: now, status: 'archived' } });
+      await tx.task.updateMany({ where: { goal: { userId }, deletedAt: null }, data: { deletedAt: now, status: 'cancelled' } });
+      await tx.notification.updateMany({ where: { userId, status: { in: ['scheduled', 'failed'] } }, data: { status: 'cancelled' } });
+      await tx.syncState.updateMany({ where: { userId }, data: { diagnosticsJson: { accountDeletedAt: now.toISOString() } } });
+      return tx.user.update({ where: { id: userId }, data: { deletedAt: now } });
+    });
   }
 
   async deleteGoal(userId: string, goalId: string) {

@@ -1,9 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, TaskStatus } from '@prisma/client';
-import { endOfDate, parseDateOnly } from '../common/date-utils';
+import { endOfDate, formatDateOnly, parseDateOnly } from '../common/date-utils';
 import { SyncRevisionService } from '../common/sync-revision.service';
 import { GoalsService } from '../goals/goals.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WorkerService } from '../worker/worker.service';
 import { CreateTaskDto, RescheduleTaskDto, TaskActionDto, UpdateTaskDto } from './dto';
 
 type TaskAction = 'start' | 'complete' | 'skip' | 'undo';
@@ -14,6 +15,7 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly goals: GoalsService,
     private readonly revisions: SyncRevisionService,
+    private readonly worker: WorkerService,
   ) {}
 
   list(userId: string) {
@@ -35,7 +37,12 @@ export class TasksService {
 
   async create(userId: string, dto: CreateTaskDto) {
     await this.goals.assertGoalOwner(userId, dto.goalId);
-    if (dto.trackId) await this.goals.assertTrackOwner(userId, dto.trackId);
+    if (dto.trackId) {
+      const track = await this.goals.assertTrackOwner(userId, dto.trackId);
+      if (track.goalId !== dto.goalId) throw new BadRequestException('Track must belong to the selected goal.');
+    }
+    if (dto.parentTaskId) await this.assertRelatedTask(userId, dto.goalId, dto.parentTaskId, 'Parent task');
+    await this.assertValidDependencies(userId, dto.goalId, dto.dependsOnTaskIds ?? []);
     const task = await this.prisma.task.create({
       data: {
         goalId: dto.goalId,
@@ -110,6 +117,8 @@ export class TasksService {
     });
     await this.revisions.record(userId, 'task', updated.id, action, updated as unknown as Prisma.InputJsonValue);
     await this.revisions.record(userId, 'progress_event', event.id, 'create', event as unknown as Prisma.InputJsonValue);
+    await this.worker.enqueueSnapshotRecalculation(userId, formatDateOnly(event.eventDate), formatDateOnly(event.eventDate));
+    await this.worker.enqueueProbabilityUpdate(userId, task.goalId);
     if (dto.clientActionId) {
       await this.prisma.clientActionLog.create({
         data: {
@@ -149,6 +158,22 @@ export class TasksService {
     if (!task || task.deletedAt) throw new NotFoundException('Task not found.');
     if (task.goal.userId !== userId) throw new ForbiddenException('Task does not belong to the current user.');
     return task;
+  }
+
+  private async assertRelatedTask(userId: string, goalId: string, taskId: string, label: string) {
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { goal: true } });
+    if (!task || task.deletedAt) throw new BadRequestException(`${label} does not exist.`);
+    if (task.goal.userId !== userId || task.goalId !== goalId) throw new BadRequestException(`${label} must belong to the same goal.`);
+    if (task.status === 'cancelled') throw new BadRequestException(`${label} cannot be cancelled.`);
+    return task;
+  }
+
+  private async assertValidDependencies(userId: string, goalId: string, dependsOnTaskIds: string[]) {
+    const uniqueIds = [...new Set(dependsOnTaskIds)];
+    if (uniqueIds.length !== dependsOnTaskIds.length) throw new BadRequestException('Duplicate task dependencies are not allowed.');
+    for (const dependsOnTaskId of uniqueIds) {
+      await this.assertRelatedTask(userId, goalId, dependsOnTaskId, 'Dependency task');
+    }
   }
 
   private actionData(action: TaskAction, now: Date): Prisma.TaskUpdateInput {

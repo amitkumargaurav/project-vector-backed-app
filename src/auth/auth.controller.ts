@@ -43,4 +43,3 @@ export class AuthController {
     return this.auth.me(user.id);
   }
 }
-

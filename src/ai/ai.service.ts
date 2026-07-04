@@ -2,18 +2,20 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { GoalsService } from '../goals/goals.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WorkerService } from '../worker/worker.service';
 
 @Injectable()
 export class AiService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly goals: GoalsService,
+    private readonly worker: WorkerService,
   ) {}
 
   async createSuggestion(userId: string, suggestionType: string, inputJson: Record<string, unknown>, requiresUserApproval = true) {
     const goalId = inputJson.goalId ? String(inputJson.goalId) : undefined;
     if (goalId) await this.goals.assertGoalOwner(userId, goalId);
-    return this.prisma.aISuggestion.create({
+    const suggestion = await this.prisma.aISuggestion.create({
       data: {
         userId,
         goalId,
@@ -27,5 +29,7 @@ export class AiService {
         requiresUserApproval,
       },
     });
+    await this.worker.enqueueAISuggestion(suggestion.id);
+    return suggestion;
   }
 }

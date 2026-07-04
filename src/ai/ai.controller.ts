@@ -13,7 +13,22 @@ export class AiController {
 
   @Post('generate-goal-plan')
   generateGoalPlan(@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>) {
-    return this.ai.createSuggestion(user.id, 'goal_plan', body);
+    return this.ai.createSuggestion(user.id, 'goal_setup', body);
+  }
+
+  @Post('roadmap')
+  roadmap(@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>) {
+    return this.ai.createSuggestion(user.id, 'roadmap_generation', body);
+  }
+
+  @Post('task-breakdown')
+  taskBreakdown(@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>) {
+    return this.ai.createSuggestion(user.id, 'task_breakdown', body);
+  }
+
+  @Post('daily-plan')
+  dailyPlan(@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>) {
+    return this.ai.createSuggestion(user.id, 'daily_plan', body);
   }
 
   @Post('explain-roadmap')
@@ -36,4 +51,3 @@ export class AiController {
     return this.ai.createSuggestion(user.id, 'blocker_analysis', body);
   }
 }
-
