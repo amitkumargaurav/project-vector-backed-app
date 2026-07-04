@@ -5,8 +5,17 @@ export class SyncActionDto {
   @IsString()
   clientActionId!: string;
 
+  @IsOptional()
   @IsString()
-  actionType!: string;
+  clientEventId?: string;
+
+  @IsOptional()
+  @IsString()
+  actionType?: string;
+
+  @IsOptional()
+  @IsString()
+  type?: string;
 
   @IsObject()
   payload!: Record<string, unknown>;
@@ -22,4 +31,3 @@ export class SyncPushDto {
   @IsString()
   deviceId?: string;
 }
-

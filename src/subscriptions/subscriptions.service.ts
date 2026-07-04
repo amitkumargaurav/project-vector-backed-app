@@ -12,10 +12,15 @@ export class SubscriptionsService {
       create: { userId, tier: 'free', status: 'active' },
     });
     return {
+      userId: subscription.userId,
+      plan: subscription.tier === 'premium' ? 'premium' : 'free',
       tier: subscription.tier,
       status: subscription.status,
+      premiumUntil: subscription.currentPeriodEnd,
       current_period_end: subscription.currentPeriodEnd,
       feature_flags: subscription.featureFlagsJson,
+      syncStatus: 'synced',
+      updatedAt: subscription.updatedAt,
     };
   }
 }

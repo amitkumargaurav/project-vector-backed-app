@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { GoalsService } from '../goals/goals.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,6 +30,13 @@ export class AiService {
       },
     });
     await this.worker.enqueueAISuggestion(suggestion.id);
+    return suggestion;
+  }
+
+  async getSuggestion(userId: string, suggestionId: string) {
+    const suggestion = await this.prisma.aISuggestion.findUnique({ where: { id: suggestionId } });
+    if (!suggestion) throw new NotFoundException('AI suggestion not found.');
+    if (suggestion.userId !== userId) throw new ForbiddenException('AI suggestion does not belong to the current user.');
     return suggestion;
   }
 }

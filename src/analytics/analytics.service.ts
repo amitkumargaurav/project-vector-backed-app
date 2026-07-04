@@ -54,9 +54,13 @@ export class AnalyticsService {
   }
 
   async history(userId: string, period: string, from: string, to: string) {
-    if (period === 'weekly') return { rows: await this.weeklyRows(userId, parseDateOnly(from), parseDateOnly(to)) };
-    if (period === 'monthly') return { rows: await this.monthlyRows(userId, `${from}-01`, `${to}-01`) };
-    return { rows: await this.dailyRows(userId, parseDateOnly(from), parseDateOnly(to)) };
+    const rows =
+      period === 'weekly'
+        ? await this.weeklyRows(userId, parseDateOnly(from), parseDateOnly(to))
+        : period === 'monthly'
+          ? await this.monthlyRows(userId, this.monthStart(from), this.monthStart(to))
+          : await this.dailyRows(userId, parseDateOnly(from), parseDateOnly(to));
+    return rows.map((row) => this.serializeClientSnapshot(period as PeriodType, row));
   }
 
   async graphContext(userId: string, date: string, before: number, after: number) {
@@ -170,6 +174,10 @@ export class AnalyticsService {
       rows.push(await this.aggregateRow(userId, 'monthly', cursor, end));
     }
     return rows;
+  }
+
+  private monthStart(value: string) {
+    return `${value.slice(0, 7)}-01`;
   }
 
   private async buildDailyRow(userId: string, date: Date) {
@@ -301,6 +309,45 @@ export class AnalyticsService {
       risk_level: snapshot.riskLevel,
       data_type: snapshot.dataType,
       sync_revision: snapshot.syncRevision.toString(),
+    };
+  }
+
+  private serializeClientSnapshot(
+    period: PeriodType,
+    snapshot: {
+      period_label: string;
+      period_start: string;
+      period_end: string;
+      completion_percentage: number | null;
+      probability_percentage: number | null;
+      planned_task_count: number;
+      completed_task_count: number;
+      skipped_task_count: number;
+      missed_task_count: number;
+      planned_minutes: number;
+      completed_minutes: number;
+      data_type: DataType;
+      sync_revision: string;
+    },
+  ) {
+    return {
+      id: `${period}-${snapshot.period_start}`,
+      period,
+      periodLabel: snapshot.period_label,
+      periodStart: snapshot.period_start,
+      periodEnd: snapshot.period_end,
+      completionPercentage: snapshot.completion_percentage ?? 0,
+      probabilityPercentage: snapshot.probability_percentage ?? 0,
+      plannedTaskCount: snapshot.planned_task_count,
+      completedTaskCount: snapshot.completed_task_count,
+      skippedTaskCount: snapshot.skipped_task_count,
+      missedTaskCount: snapshot.missed_task_count,
+      plannedMinutes: snapshot.planned_minutes,
+      completedMinutes: snapshot.completed_minutes,
+      dataType: snapshot.data_type,
+      syncStatus: 'synced',
+      syncRevision: snapshot.sync_revision,
+      updatedAt: new Date().toISOString(),
     };
   }
 

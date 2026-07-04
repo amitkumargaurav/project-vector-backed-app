@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { NotificationStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkerService } from '../worker/worker.service';
+import { NotificationPreferencesDto } from './dto';
 
 @Injectable()
 export class NotificationsService {
@@ -14,6 +15,10 @@ export class NotificationsService {
 
   list(userId: string) {
     return this.prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 100 });
+  }
+
+  preferences(userId: string) {
+    return this.prisma.notificationPreference.upsert({ where: { userId }, update: {}, create: { userId } });
   }
 
   async create(userId: string, data: { type: string; title: string; body: string; payloadJson: Record<string, unknown> }) {
@@ -50,7 +55,7 @@ export class NotificationsService {
     return notification;
   }
 
-  updatePreferences(userId: string, body: Record<string, unknown>) {
+  updatePreferences(userId: string, body: NotificationPreferencesDto) {
     return this.prisma.notificationPreference.upsert({
       where: { userId },
       update: body,

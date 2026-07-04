@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma } from '@prisma/client';
-import { addDays, parseDateOnly } from '../common/date-utils';
+import { DataType, Prisma, TaskStatus } from '@prisma/client';
+import { addDays, formatDateOnly, parseDateOnly } from '../common/date-utils';
 import { EventsService } from '../events/events.service';
 import { GoalsService } from '../goals/goals.service';
 import { HistoryService } from '../history/history.service';
@@ -44,13 +44,81 @@ export class SyncService {
     return this.serialize({ user, goals, tasks, analytics, sync_revision: latest });
   }
 
+  async appBootstrap(userId: string) {
+    const today = parseDateOnly(new Date().toISOString().slice(0, 10));
+    const pastDays = this.config.get<number>('OFFLINE_BOOTSTRAP_PAST_DAYS', 90);
+    const futureDays = this.config.get<number>('OFFLINE_BOOTSTRAP_FUTURE_DAYS', 30);
+    const [user, goal, subscription, snapshots, reviews, latest] = await Promise.all([
+      this.prisma.user.findUniqueOrThrow({ where: { id: userId }, include: { profile: true, preferences: true, privacySettings: true } }),
+      this.prisma.goal.findFirst({
+        where: { userId, deletedAt: null },
+        orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+        include: {
+          tracks: { where: { deletedAt: null } },
+          tasks: {
+            where: {
+              deletedAt: null,
+              scheduledDate: { gte: addDays(today, -pastDays), lte: addDays(today, futureDays) },
+            },
+          },
+          roadmapVersions: {
+            orderBy: { version: 'desc' },
+            take: 1,
+            include: { milestones: { orderBy: { sortOrder: 'asc' } } },
+          },
+          probabilities: { orderBy: { calculatedAt: 'desc' }, take: 1 },
+        },
+      }),
+      this.prisma.subscription.upsert({
+        where: { userId },
+        update: {},
+        create: { userId, tier: 'free', status: 'active' },
+      }),
+      this.prisma.analyticsSnapshot.findMany({
+        where: { userId, periodStart: { gte: addDays(today, -pastDays), lte: addDays(today, futureDays) } },
+        orderBy: { periodStart: 'asc' },
+      }),
+      this.prisma.reviewDaily.findMany({
+        where: { userId, reviewDate: { gte: addDays(today, -pastDays), lte: today } },
+        orderBy: { reviewDate: 'desc' },
+      }),
+      this.latestRevision(userId),
+    ]);
+
+    const activeGoal = goal ? this.toClientGoal(goal) : null;
+    return this.serialize({
+      profile: this.toClientProfile(user),
+      goal: activeGoal,
+      tracks: goal?.tracks.map((track) => this.toClientTrack(track)) ?? [],
+      roadmap: goal?.roadmapVersions[0]?.milestones.map((milestone, index) => this.toClientRoadmapItem(goal.id, milestone, index)) ?? [],
+      tasks: goal?.tasks.map((task) => this.toClientTask(task)) ?? [],
+      reviews: reviews.map((review) => this.toClientReview(review)),
+      snapshots: snapshots.map((snapshot) => this.toClientSnapshot(snapshot)),
+      subscription: this.toClientSubscription(subscription),
+      syncRevision: latest,
+    });
+  }
+
   async changes(userId: string, sinceRevision: bigint) {
     const changes = await this.prisma.syncChangeLog.findMany({
       where: { userId, revision: { gt: sinceRevision } },
       orderBy: { revision: 'asc' },
       take: 500,
     });
-    return this.serialize({ changes, latest_revision: await this.latestRevision(userId) });
+    const latestRevision = await this.latestRevision(userId);
+    return this.serialize({
+      changes: changes.map((change) => ({
+        revision: change.revision,
+        entityType: change.entityType,
+        entityId: change.entityId,
+        action: change.action,
+        payload: change.payloadJson,
+        createdAt: change.createdAt,
+      })),
+      latestRevision,
+      latest_revision: latestRevision,
+      hasMore: changes.length === 500 && changes[changes.length - 1]?.revision < latestRevision,
+    });
   }
 
   async push(userId: string, dto: SyncPushDto) {
@@ -58,7 +126,7 @@ export class SyncService {
     if (dto.actions.length > max) throw new BadRequestException(`At most ${max} actions can be pushed at once.`);
     const results = [];
     for (const action of dto.actions) {
-      results.push(await this.applyAction(userId, action));
+      results.push(await this.applyAction(userId, this.normalizeAction(action)));
     }
     if (dto.deviceId) {
       await this.prisma.syncState.upsert({
@@ -67,7 +135,21 @@ export class SyncService {
         create: { userId, deviceId: dto.deviceId, lastPushedAt: new Date(), diagnosticsJson: { lastPushCount: dto.actions.length } },
       });
     }
-    return this.serialize({ results, latest_revision: await this.latestRevision(userId) });
+    const acceptedActionIds = results
+      .filter((result) => result.status === 'accepted' || result.status === 'duplicate')
+      .map((result) => result.clientActionId);
+    const rejectedActionIds = results.filter((result) => result.status === 'rejected').map((result) => result.clientActionId);
+    const duplicateActionIds = results.filter((result) => result.status === 'duplicate').map((result) => result.clientActionId);
+    const latestRevision = await this.latestRevision(userId);
+    return this.serialize({
+      acceptedActionIds,
+      rejectedActionIds,
+      duplicateActionIds,
+      partialAcceptActionIds: [],
+      results,
+      latestRevision,
+      latest_revision: latestRevision,
+    });
   }
 
   async status(userId: string) {
@@ -89,7 +171,7 @@ export class SyncService {
         data: {
           userId,
           clientActionId: action.clientActionId,
-          actionType: action.actionType,
+          actionType: action.actionType ?? 'unknown',
           status: 'accepted',
           resultJson: result as Prisma.InputJsonValue,
         },
@@ -98,7 +180,7 @@ export class SyncService {
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Unknown sync error';
       await this.prisma.clientActionLog.create({
-        data: { userId, clientActionId: action.clientActionId, actionType: action.actionType, status: 'rejected', reason },
+        data: { userId, clientActionId: action.clientActionId, actionType: action.actionType ?? 'unknown', status: 'rejected', reason },
       });
       return { clientActionId: action.clientActionId, status: 'rejected', reason };
     }
@@ -106,6 +188,7 @@ export class SyncService {
 
   private dispatch(userId: string, action: SyncActionDto) {
     const payload = action.payload;
+    if (!action.actionType) throw new BadRequestException('Sync action is missing actionType/type.');
     if (action.actionType === 'goal.create') {
       return this.goals.createGoal(userId, {
         title: String(payload.title),
@@ -234,5 +317,173 @@ export class SyncService {
 
   private serialize(value: unknown) {
     return JSON.parse(JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item)));
+  }
+
+  private normalizeAction(action: SyncActionDto): SyncActionDto {
+    const actionType = action.actionType ?? this.clientActionType(action.type);
+    const payload = { ...action.payload };
+    if (action.clientEventId && !payload.clientEventId) payload.clientEventId = action.clientEventId;
+    if (action.type === 'past_day_marked_empty' && !payload.eventType) payload.eventType = 'day.mark_empty';
+    if (action.type === 'past_day_marked_skipped' && !payload.eventType) payload.eventType = 'day.mark_skipped';
+    if (action.type === 'past_note_added' && !payload.eventType) payload.eventType = 'day.note';
+    return { ...action, actionType, payload };
+  }
+
+  private clientActionType(type?: string) {
+    const mapping: Record<string, string> = {
+      task_started: 'task.start',
+      task_completed: 'task.complete',
+      task_skipped: 'task.skip',
+      task_rescheduled: 'task.reschedule',
+      review_submitted: 'history.review.upsert',
+      past_day_marked_empty: 'history.event.append',
+      past_day_marked_skipped: 'history.event.append',
+      past_note_added: 'history.event.append',
+      past_review_added: 'history.review.upsert',
+    };
+    return type ? mapping[type] : undefined;
+  }
+
+  private toClientProfile(user: Prisma.UserGetPayload<{ include: { profile: true; preferences: true; privacySettings: true } }>) {
+    return {
+      id: user.id,
+      displayName: user.displayName ?? user.email,
+      timezone: user.profile?.timezone ?? 'UTC',
+      onboardingComplete: user.profile?.onboardingCompleted ?? false,
+      sensitiveGoalMode: user.privacySettings?.sensitiveGoalModeEnabled ?? false,
+      syncStatus: 'synced',
+      updatedAt: user.updatedAt,
+    };
+  }
+
+  private toClientGoal(goal: Prisma.GoalGetPayload<{ include: { probabilities: true } }>) {
+    return {
+      id: goal.id,
+      title: goal.title,
+      deadline: goal.deadline ? formatDateOnly(goal.deadline) : '',
+      weeklyAvailableMinutes: 0,
+      privacyMode: 'standard',
+      progressPercentage: Math.round(goal.overallProgress),
+      probabilityPercentage: Math.round(goal.probabilities[0]?.probabilityPercentage ?? 50),
+      syncStatus: 'synced',
+      syncRevision: goal.syncRevision,
+      updatedAt: goal.updatedAt,
+    };
+  }
+
+  private toClientTrack(track: Prisma.GoalTrackGetPayload<object>) {
+    return {
+      id: track.id,
+      goalId: track.goalId,
+      name: track.name,
+      progressPercentage: Math.round(track.progress),
+      status: track.status === 'paused' ? 'paused' : track.progress < 50 ? 'needs_attention' : 'on_track',
+      syncStatus: 'synced',
+      syncRevision: track.syncRevision,
+      updatedAt: track.updatedAt,
+    };
+  }
+
+  private toClientRoadmapItem(goalId: string, milestone: Prisma.MilestoneGetPayload<object>, index: number) {
+    return {
+      id: milestone.id,
+      goalId,
+      title: milestone.title,
+      targetDate: milestone.targetDate ? formatDateOnly(milestone.targetDate) : '',
+      state: index === 0 ? 'active' : 'planned',
+      note: typeof milestone.metadataJson === 'object' && milestone.metadataJson && 'note' in milestone.metadataJson ? String(milestone.metadataJson.note) : undefined,
+      syncStatus: 'synced',
+      updatedAt: new Date(),
+    };
+  }
+
+  private toClientTask(task: Prisma.TaskGetPayload<object>) {
+    return {
+      id: task.id,
+      goalId: task.goalId,
+      trackId: task.trackId ?? undefined,
+      title: task.title,
+      plannedDate: task.scheduledDate ? formatDateOnly(task.scheduledDate) : '',
+      estimatedMinutes: task.estimatedMinutes,
+      status: this.toClientTaskStatus(task.status),
+      syncStatus: 'synced',
+      syncRevision: task.syncRevision,
+      updatedAt: task.updatedAt,
+    };
+  }
+
+  private toClientTaskStatus(status: TaskStatus) {
+    const mapping: Record<TaskStatus, string> = {
+      pending: 'planned',
+      in_progress: 'started',
+      completed: 'completed',
+      skipped: 'skipped',
+      missed: 'missed',
+      rescheduled: 'planned',
+      cancelled: 'skipped',
+    };
+    return mapping[status];
+  }
+
+  private toClientReview(review: Prisma.ReviewDailyGetPayload<object>) {
+    return {
+      id: review.id,
+      goalId: review.goalId,
+      period: 'daily',
+      periodStart: formatDateOnly(review.reviewDate),
+      mood: review.mood,
+      note: review.notes ?? '',
+      syncStatus: 'synced',
+      updatedAt: review.updatedAt,
+    };
+  }
+
+  private toClientSnapshot(snapshot: {
+    id: string;
+    periodType: string;
+    periodStart: Date;
+    periodEnd: Date;
+    completionPercentage: number | null;
+    probabilityPercentage: number | null;
+    plannedTaskCount: number;
+    completedTaskCount: number;
+    skippedTaskCount: number;
+    missedTaskCount: number;
+    plannedMinutes: number;
+    completedMinutes: number;
+    dataType: DataType;
+    syncRevision: bigint;
+    calculatedAt: Date;
+  }) {
+    return {
+      id: snapshot.id,
+      period: snapshot.periodType,
+      periodLabel: formatDateOnly(snapshot.periodStart),
+      periodStart: formatDateOnly(snapshot.periodStart),
+      periodEnd: formatDateOnly(snapshot.periodEnd),
+      completionPercentage: snapshot.completionPercentage ?? 0,
+      probabilityPercentage: snapshot.probabilityPercentage ?? 0,
+      plannedTaskCount: snapshot.plannedTaskCount,
+      completedTaskCount: snapshot.completedTaskCount,
+      skippedTaskCount: snapshot.skippedTaskCount,
+      missedTaskCount: snapshot.missedTaskCount,
+      plannedMinutes: snapshot.plannedMinutes,
+      completedMinutes: snapshot.completedMinutes,
+      dataType: snapshot.dataType,
+      syncStatus: 'synced',
+      syncRevision: snapshot.syncRevision,
+      updatedAt: snapshot.calculatedAt,
+    };
+  }
+
+  private toClientSubscription(subscription: { userId: string; tier: string; status: string; currentPeriodEnd: Date | null; updatedAt: Date }) {
+    return {
+      userId: subscription.userId,
+      plan: subscription.tier === 'premium' ? 'premium' : 'free',
+      status: subscription.status,
+      premiumUntil: subscription.currentPeriodEnd ? subscription.currentPeriodEnd.toISOString() : undefined,
+      syncStatus: 'synced',
+      updatedAt: subscription.updatedAt,
+    };
   }
 }

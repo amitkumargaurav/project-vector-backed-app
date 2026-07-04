@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
@@ -49,5 +49,10 @@ export class AiController {
   @Post('analyze-blocker')
   analyzeBlocker(@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>) {
     return this.ai.createSuggestion(user.id, 'blocker_analysis', body);
+  }
+
+  @Get('suggestions/:suggestionId')
+  suggestion(@CurrentUser() user: AuthUser, @Param('suggestionId') suggestionId: string) {
+    return this.ai.getSuggestion(user.id, suggestionId);
   }
 }

@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Put, UseGuards } from '@nestjs/comm
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
+import { NotificationPreferencesDto } from './dto';
 import { NotificationsService } from './notifications.service';
 
 @ApiTags('notifications')
@@ -16,6 +17,11 @@ export class NotificationsController {
     return this.notifications.list(user.id);
   }
 
+  @Get('preferences')
+  preferences(@CurrentUser() user: AuthUser) {
+    return this.notifications.preferences(user.id);
+  }
+
   @Post('test')
   test(@CurrentUser() user: AuthUser) {
     return this.notifications.create(user.id, {
@@ -27,7 +33,7 @@ export class NotificationsController {
   }
 
   @Post('preferences')
-  preferences(@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>) {
+  updatePreferences(@CurrentUser() user: AuthUser, @Body() body: NotificationPreferencesDto) {
     return this.notifications.updatePreferences(user.id, body);
   }
 
@@ -41,4 +47,3 @@ export class NotificationsController {
     return this.notifications.mark(user.id, notificationId, 'clicked');
   }
 }
-

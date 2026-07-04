@@ -18,8 +18,12 @@ export class SyncController {
   }
 
   @Get('changes')
-  changes(@CurrentUser() user: AuthUser, @Query('since_revision') sinceRevision?: string) {
-    return this.sync.changes(user.id, BigInt(sinceRevision ?? 0));
+  changes(
+    @CurrentUser() user: AuthUser,
+    @Query('since_revision') sinceRevision?: string,
+    @Query('sync_revision') syncRevision?: string,
+  ) {
+    return this.sync.changes(user.id, BigInt(sinceRevision ?? syncRevision ?? 0));
   }
 
   @Post('push')
@@ -33,3 +37,15 @@ export class SyncController {
   }
 }
 
+@ApiTags('app')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
+@Controller('app')
+export class AppBootstrapController {
+  constructor(private readonly sync: SyncService) {}
+
+  @Get('bootstrap')
+  bootstrap(@CurrentUser() user: AuthUser) {
+    return this.sync.appBootstrap(user.id);
+  }
+}
