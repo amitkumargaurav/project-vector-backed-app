@@ -9,20 +9,33 @@ import { PrismaService } from '../prisma/prisma.service';
 @Injectable()
 export class AuthService {
   private readonly googleClient: OAuth2Client;
+  private readonly googleAudiences: string[];
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
   ) {
-    this.googleClient = new OAuth2Client(this.config.getOrThrow<string>('GOOGLE_CLIENT_ID'));
+    this.googleAudiences = parseGoogleClientIds(
+      this.config.get<string>('GOOGLE_CLIENT_ID'),
+      this.config.get<string>('GOOGLE_CLIENT_IDS'),
+    );
+    if (this.googleAudiences.length === 0) {
+      throw new Error('At least one Google OAuth client ID must be configured.');
+    }
+    this.googleClient = new OAuth2Client(this.googleAudiences[0]);
   }
 
   async loginWithGoogle(idToken: string, userAgent?: string) {
-    const ticket = await this.googleClient.verifyIdToken({
-      idToken,
-      audience: this.config.getOrThrow<string>('GOOGLE_CLIENT_ID'),
-    });
+    let ticket;
+    try {
+      ticket = await this.googleClient.verifyIdToken({
+        idToken,
+        audience: this.googleAudiences,
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid Google identity token.');
+    }
     const payload = ticket.getPayload();
     if (!payload?.email || !payload.sub) throw new UnauthorizedException('Invalid Google identity token.');
 
@@ -107,4 +120,14 @@ export class AuthService {
 
     return { accessToken, refreshToken };
   }
+}
+
+export function parseGoogleClientIds(primary?: string, additional?: string): string[] {
+  return Array.from(
+    new Set(
+      [primary, ...(additional ?? '').split(',')]
+        .map((clientId) => clientId?.trim())
+        .filter((clientId): clientId is string => Boolean(clientId)),
+    ),
+  );
 }

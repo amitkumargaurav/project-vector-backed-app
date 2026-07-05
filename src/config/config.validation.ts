@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+function hasGoogleClientId(value?: string) {
+  return Boolean(value?.split(',').some((clientId) => clientId.trim()));
+}
+
 export const configValidationSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().default(3000),
@@ -11,7 +15,8 @@ export const configValidationSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(16),
   JWT_ACCESS_TTL: z.string().default('15m'),
   JWT_REFRESH_TTL: z.string().default('30d'),
-  GOOGLE_CLIENT_ID: z.string().min(1),
+  GOOGLE_CLIENT_ID: z.string().trim().min(1).optional(),
+  GOOGLE_CLIENT_IDS: z.string().optional(),
   FIREBASE_PROJECT_ID: z.string().optional(),
   FIREBASE_CLIENT_EMAIL: z.string().optional(),
   FIREBASE_PRIVATE_KEY: z.string().optional(),
@@ -30,6 +35,9 @@ export const configValidationSchema = z.object({
   DEFAULT_GRAPH_MONTHLY_MONTHS: z.coerce.number().default(12),
   MAX_SYNC_ACTIONS_PER_PUSH: z.coerce.number().default(100),
   MAX_NOTIFICATIONS_PER_DAY: z.coerce.number().default(3),
+}).refine((config) => Boolean(config.GOOGLE_CLIENT_ID) || hasGoogleClientId(config.GOOGLE_CLIENT_IDS), {
+  message: 'GOOGLE_CLIENT_ID or GOOGLE_CLIENT_IDS is required',
+  path: ['GOOGLE_CLIENT_ID'],
 });
 
 export function validateConfig(config: Record<string, unknown>) {

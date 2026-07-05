@@ -30,6 +30,31 @@ Both files are ignored by Git, along with every `.env*` file, so API keys and se
 For local development, edit `.env.development`.
 For production, set `NODE_ENV=production` and provide `.env.production` on the server.
 
+Google sign-in accepts ID tokens whose `aud` claim matches the configured OAuth client ID. Set
+`GOOGLE_CLIENT_ID` for a single web client, or set `GOOGLE_CLIENT_IDS` to a comma-separated list when
+the app has separate web, Android, or iOS OAuth clients. `GOOGLE_CLIENT_ID` is still accepted and can
+be used together with `GOOGLE_CLIENT_IDS`.
+
+Google login expects a Google ID token, not a Google access token or auth code:
+
+```http
+POST /api/auth/google
+Content-Type: application/json
+
+{ "idToken": "<google-id-token>" }
+```
+
+The response contains this backend's `accessToken` and `refreshToken`. Use the backend `accessToken`,
+not the original Google token, for protected endpoints:
+
+```http
+GET /api/auth/me
+Authorization: Bearer <backend-access-token>
+```
+
+If `/api/auth/google` returns `401`, decode the Google ID token payload and compare its `aud` claim
+with `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_IDS`. After changing any `.env` value, restart the dev server.
+
 ## Development
 
 Use Node 24 before installing or running commands.
