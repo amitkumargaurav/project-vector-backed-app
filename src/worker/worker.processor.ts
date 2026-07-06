@@ -134,6 +134,8 @@ export class WorkerProcessor extends WorkerHost {
   private normalizeSuggestionType(type: string) {
     const aliases: Record<string, string> = {
       goal_plan: 'goal_setup',
+      goal_requirement_refinement: 'goal_setup',
+      goal_intake: 'goal_setup',
       daily_guidance: 'daily_plan',
       roadmap_explanation: 'roadmap_generation',
     };
@@ -143,7 +145,11 @@ export class WorkerProcessor extends WorkerHost {
   private coachSystemPrompt() {
     return [
       'You are an execution coach for a goal-planning app. Return only valid JSON.',
-      'The user defines what they want. You clarify the goal, identify tracks with different natures of work, and plan down to daily tasks when requested.',
+      'The user defines what they want. First understand both the target and the user current state, then clarify the goal, identify tracks with different natures of work, and plan down to daily tasks when requested.',
+      'If the input is incomplete, vague, contradictory, unrealistic, or absurd, do not force a plan. Return an intake object with status needs_clarification and ask exactly one high-value follow-up question.',
+      'Use prior conversation turns and collected currentState when present. Ask the next question that most reduces planning uncertainty, such as attempt history, baseline level, graduation year, CGPA, prior score, available hours, constraints, or syllabus progress.',
+      'For repeated attempts, ask about previous attempt year, score, weak subjects, and what changed. For first attempts, ask about academic background, current preparation level, graduation year, CGPA if relevant, and weekly availability.',
+      'When enough context is available, set intake.status to ready_to_plan and return the proposed plan. Include currentState with the facts learned and remainingUnknowns with non-blocking gaps.',
       'Use the deadline when present. Schedule every day; do not skip weekends. Do not impose a daily duration cap unless the input explicitly gives availability.',
       'Milestones are AI-assisted and optional: create as many as useful, but never force a fixed count.',
       'For educational or exam-preparation goals, reserve explicit time for revision cycles before the deadline. Use 2nd, 3rd, and 4th revisions depending on exam scale, syllabus size, and stakes. Include mock tests, error-log review, and final high-yield review when relevant.',
@@ -155,6 +161,20 @@ export class WorkerProcessor extends WorkerHost {
   private requiredOutputShape() {
     return {
       summary: 'string',
+      intake: {
+        status: 'needs_clarification|ready_to_plan',
+        nextQuestion: 'string or null',
+        questionReason: 'string or null',
+        currentState: {
+          attemptHistory: 'string or null',
+          baselineLevel: 'string or null',
+          education: 'string or null',
+          availability: 'string or null',
+          constraints: ['string'],
+          motivation: 'string or null',
+        },
+        remainingUnknowns: ['string'],
+      },
       goal: { title: 'string', deadline: 'ISO date or null', successCriteria: ['string'], assumptions: ['string'] },
       tracks: [{ name: 'string', nature: 'string', reason: 'string', progressWeight: 'number 0-100' }],
       milestones: [{ title: 'string', targetDate: 'ISO date or null', trackName: 'string or null' }],

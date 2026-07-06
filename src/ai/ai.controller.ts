@@ -16,6 +16,11 @@ export class AiController {
     return this.ai.createSuggestion(user.id, 'goal_setup', body);
   }
 
+  @Post('refine-goal-requirements')
+  refineGoalRequirements(@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>) {
+    return this.ai.createSuggestion(user.id, 'goal_requirement_refinement', body, false);
+  }
+
   @Post('roadmap')
   roadmap(@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>) {
     return this.ai.createSuggestion(user.id, 'roadmap_generation', body);
