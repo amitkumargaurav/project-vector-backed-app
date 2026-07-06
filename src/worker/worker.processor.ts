@@ -47,10 +47,11 @@ export class WorkerProcessor extends WorkerHost {
           include: { tracks: { where: { deletedAt: null } }, tasks: { where: { deletedAt: null }, orderBy: { scheduledDate: 'asc' }, take: 200 } },
         })
       : null;
+    const suggestionContext = await this.buildSuggestionContext(suggestion.id, suggestion.userId, suggestion.goalId, suggestion.suggestionType, suggestion.inputJson);
     const client = new OpenAI({ apiKey });
     try {
       const response = await client.chat.completions.create({
-        model: this.config.get<string>('OPENAI_MODEL', 'gpt-4.1-mini'),
+        model: this.config.get<string>('OPENAI_MODEL', 'gpt-5.4-mini'),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: this.coachSystemPrompt() },
@@ -59,6 +60,7 @@ export class WorkerProcessor extends WorkerHost {
             content: JSON.stringify({
               suggestionType: this.normalizeSuggestionType(suggestion.suggestionType),
               input: suggestion.inputJson,
+              priorAISuggestions: suggestionContext,
               goal,
               requiredOutput: this.requiredOutputShape(),
             }),
@@ -142,11 +144,79 @@ export class WorkerProcessor extends WorkerHost {
     return aliases[type] ?? type;
   }
 
+  private async buildSuggestionContext(suggestionId: string, userId: string, goalId: string | null, suggestionType: string, inputJson: unknown) {
+    const conversationId = this.conversationIdFromInput(inputJson);
+    if (!goalId && !conversationId) return [];
+
+    const normalizedType = this.normalizeSuggestionType(suggestionType);
+    const candidates = await this.prisma.aISuggestion.findMany({
+      where: {
+        userId,
+        id: { not: suggestionId },
+        ...(goalId ? { goalId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 12,
+      select: {
+        id: true,
+        goalId: true,
+        suggestionType: true,
+        inputJson: true,
+        outputJson: true,
+        createdAt: true,
+      },
+    });
+    return candidates
+      .filter((candidate) => {
+        if (goalId) return true;
+        return this.normalizeSuggestionType(candidate.suggestionType) === normalizedType && this.conversationIdFromInput(candidate.inputJson) === conversationId;
+      })
+      .slice(0, 6)
+      .reverse()
+      .map((candidate) => ({
+        id: candidate.id,
+        createdAt: candidate.createdAt.toISOString(),
+        suggestionType: this.normalizeSuggestionType(candidate.suggestionType),
+        input: candidate.inputJson,
+        outputSummary: this.suggestionOutputSummary(candidate.outputJson),
+      }));
+  }
+
+  private conversationIdFromInput(input: unknown) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+    const json = input as Record<string, unknown>;
+    const value = json.aiConversationId ?? json.conversationId ?? json.threadId ?? json.intakeSessionId;
+    return typeof value === 'string' && value.trim() ? value : undefined;
+  }
+
+  private suggestionOutputSummary(output: unknown) {
+    if (!output || typeof output !== 'object' || Array.isArray(output)) return output;
+    const json = output as Record<string, unknown>;
+    const intake = json.intake && typeof json.intake === 'object' && !Array.isArray(json.intake) ? (json.intake as Record<string, unknown>) : undefined;
+    return {
+      status: json.status,
+      summary: json.summary,
+      intake: intake
+        ? {
+            status: intake.status,
+            nextQuestion: intake.nextQuestion,
+            questionReason: intake.questionReason,
+            currentState: intake.currentState,
+            remainingUnknowns: intake.remainingUnknowns,
+          }
+        : undefined,
+      goal: json.goal,
+    };
+  }
+
   private coachSystemPrompt() {
     return [
       'You are an execution coach for a goal-planning app. Return only valid JSON.',
       'The user defines what they want. First understand both the target and the user current state, then clarify the goal, identify tracks with different natures of work, and plan down to daily tasks when requested.',
-      'If the input is incomplete, vague, contradictory, unrealistic, or absurd, do not force a plan. Return an intake object with status needs_clarification and ask exactly one high-value follow-up question.',
+      'Treat priorAISuggestions as compact conversation memory. Use it to preserve facts already learned and to continue the intake flow. Ignore prior suggestions only when they are clearly unrelated to the current goal or current user input.',
+      'If priorAISuggestions contains currentState facts, carry those facts forward unless the latest input corrects them. Do not ask for a fact that is already present in currentState, the latest input, the goal, or priorAISuggestions.',
+      'If priorAISuggestions contains prior intake.nextQuestion values, do not repeat those questions. If the latest input answers a prior question, incorporate the answer and ask the next different question only if it is truly blocking.',
+      'If the input is incomplete, vague, contradictory, unrealistic, or absurd, do not force a plan. Return an intake object with status needs_clarification and ask exactly one high-value follow-up question. Never ask multiple questions in one response.',
       'Use prior conversation turns and collected currentState when present. Ask the next question that most reduces planning uncertainty, such as attempt history, baseline level, graduation year, CGPA, prior score, available hours, constraints, or syllabus progress.',
       'For repeated attempts, ask about previous attempt year, score, weak subjects, and what changed. For first attempts, ask about academic background, current preparation level, graduation year, CGPA if relevant, and weekly availability.',
       'When enough context is available, set intake.status to ready_to_plan and return the proposed plan. Include currentState with the facts learned and remainingUnknowns with non-blocking gaps.',

@@ -48,9 +48,9 @@ export class SyncService {
     const today = parseDateOnly(new Date().toISOString().slice(0, 10));
     const pastDays = this.config.get<number>('OFFLINE_BOOTSTRAP_PAST_DAYS', 90);
     const futureDays = this.config.get<number>('OFFLINE_BOOTSTRAP_FUTURE_DAYS', 30);
-    const [user, goal, subscription, snapshots, reviews, latest] = await Promise.all([
+    const [user, goals, subscription, snapshots, reviews, latest] = await Promise.all([
       this.prisma.user.findUniqueOrThrow({ where: { id: userId }, include: { profile: true, preferences: true, privacySettings: true } }),
-      this.prisma.goal.findFirst({
+      this.prisma.goal.findMany({
         where: { userId, deletedAt: null },
         orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
         include: {
@@ -85,13 +85,16 @@ export class SyncService {
       this.latestRevision(userId),
     ]);
 
-    const activeGoal = goal ? this.toClientGoal(goal) : null;
+    const clientGoals = goals.map((goal) => this.toClientGoal(goal));
     return this.serialize({
       profile: this.toClientProfile(user),
-      goal: activeGoal,
-      tracks: goal?.tracks.map((track) => this.toClientTrack(track)) ?? [],
-      roadmap: goal?.roadmapVersions[0]?.milestones.map((milestone, index) => this.toClientRoadmapItem(goal.id, milestone, index)) ?? [],
-      tasks: goal?.tasks.map((task) => this.toClientTask(task)) ?? [],
+      goal: clientGoals[0] ?? null,
+      goals: clientGoals,
+      tracks: goals.flatMap((goal) => goal.tracks.map((track) => this.toClientTrack(track))),
+      roadmap: goals.flatMap((goal) =>
+        goal.roadmapVersions[0]?.milestones.map((milestone, index) => this.toClientRoadmapItem(goal.id, milestone, index)) ?? [],
+      ),
+      tasks: goals.flatMap((goal) => goal.tasks.map((task) => this.toClientTask(task))),
       reviews: reviews.map((review) => this.toClientReview(review)),
       snapshots: snapshots.map((snapshot) => this.toClientSnapshot(snapshot)),
       subscription: this.toClientSubscription(subscription),
@@ -191,9 +194,11 @@ export class SyncService {
     if (!action.actionType) throw new BadRequestException('Sync action is missing actionType/type.');
     if (action.actionType === 'goal.create') {
       return this.goals.createGoal(userId, {
+        id: payload.id ? String(payload.id) : undefined,
         title: String(payload.title),
         category: payload.category ? String(payload.category) : undefined,
         deadline: payload.deadline ? String(payload.deadline) : undefined,
+        status: payload.status as never,
       });
     }
     if (action.actionType === 'goal.update') {
@@ -335,6 +340,7 @@ export class SyncService {
       task_completed: 'task.complete',
       task_skipped: 'task.skip',
       task_rescheduled: 'task.reschedule',
+      goal_created: 'goal.create',
       review_submitted: 'history.review.upsert',
       past_day_marked_empty: 'history.event.append',
       past_day_marked_skipped: 'history.event.append',

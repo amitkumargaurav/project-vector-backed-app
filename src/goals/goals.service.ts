@@ -14,10 +14,13 @@ export class GoalsService {
   async createGoal(userId: string, dto: CreateGoalDto) {
     const goal = await this.prisma.goal.create({
       data: {
+        id: dto.id,
         userId,
         title: dto.title,
         category: dto.category,
         deadline: dto.deadline ? new Date(dto.deadline) : undefined,
+        status: dto.status,
+        activeSince: dto.status === 'active' ? new Date() : undefined,
       },
       include: { tracks: true },
     });
@@ -58,12 +61,6 @@ export class GoalsService {
 
   async setGoalStatus(userId: string, goalId: string, status: GoalStatus) {
     await this.assertGoalOwner(userId, goalId);
-    if (status === 'active') {
-      const active = await this.prisma.goal.findFirst({ where: { userId, status: 'active', deletedAt: null } });
-      if (active && active.id !== goalId) {
-        throw new BadRequestException('MVP allows one active primary goal per user.');
-      }
-    }
     const goal = await this.prisma.goal.update({
       where: { id: goalId },
       data: { status, activeSince: status === 'active' ? new Date() : undefined },

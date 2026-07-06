@@ -2,6 +2,10 @@ import { IsDateString, IsEnum, IsNumber, IsOptional, IsString, Max, Min } from '
 import { GoalStatus, TrackStatus } from '@prisma/client';
 
 export class CreateGoalDto {
+  @IsOptional()
+  @IsString()
+  id?: string;
+
   @IsString()
   title!: string;
 
@@ -12,6 +16,10 @@ export class CreateGoalDto {
   @IsOptional()
   @IsDateString()
   deadline?: string;
+
+  @IsOptional()
+  @IsEnum(GoalStatus)
+  status?: GoalStatus;
 }
 
 export class UpdateGoalDto {
@@ -74,4 +82,3 @@ export class UpdateTrackDto {
   @IsEnum(TrackStatus)
   status?: TrackStatus;
 }
-

@@ -21,7 +21,7 @@ export const configValidationSchema = z.object({
   FIREBASE_CLIENT_EMAIL: z.string().optional(),
   FIREBASE_PRIVATE_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
-  OPENAI_MODEL: z.string().default('gpt-4.1-mini'),
+  OPENAI_MODEL: z.string().default('gpt-5.4-mini'),
   EMAIL_FROM: z.string().optional(),
   EMAIL_API_KEY: z.string().optional(),
   SENTRY_DSN: z.string().optional(),
