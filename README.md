@@ -52,6 +52,8 @@ GET /api/auth/me
 Authorization: Bearer <backend-access-token>
 ```
 
+Access tokens expire after `24h` by default. Refresh tokens expire after `30d`.
+
 If `/api/auth/google` returns `401`, decode the Google ID token payload and compare its `aud` claim
 with `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_IDS`. After changing any `.env` value, restart the dev server.
 

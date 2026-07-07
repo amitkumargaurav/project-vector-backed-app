@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { OAuth2Client } from 'google-auth-library';
 import * as bcrypt from 'bcryptjs';
-import { randomUUID } from 'crypto';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -94,12 +94,12 @@ export class AuthService {
   }
 
   private async issueTokens(userId: string, email: string, userAgent?: string, existingSessionId?: string) {
-    const sessionId = existingSessionId ?? randomUUID();
+    const sessionId = existingSessionId ?? randomUuidV4();
     const accessToken = await this.jwt.signAsync(
       { sub: userId, email },
       {
         secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET'),
-        expiresIn: this.config.get<string>('JWT_ACCESS_TTL', '15m') as never,
+        expiresIn: this.config.get<string>('JWT_ACCESS_TTL', '24h') as never,
       },
     );
     const refreshToken = await this.jwt.signAsync(
@@ -120,6 +120,14 @@ export class AuthService {
 
     return { accessToken, refreshToken };
   }
+}
+
+function randomUuidV4() {
+  const bytes = randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export function parseGoogleClientIds(primary?: string, additional?: string): string[] {
