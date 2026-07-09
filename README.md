@@ -14,10 +14,10 @@ Phase 0 NestJS backend for the local-first Vector client.
 - Analytics dashboard, consistency, probability, risk, time usage, daily/weekly/monthly graph rows
 - Roadmap versioning and plan-adjustment accept/reject flow
 - Daily, weekly, and monthly reviews
-- Notification preferences/log records and queue hook
+- Notification preferences/log records and direct FCM send hook
 - AI suggestion records with backend validation boundary; no direct AI mutations
 - Privacy export, account-delete request/confirm, goal delete, data-sharing preferences
-- BullMQ worker queue hooks for recalculation, probability, notifications, and async AI jobs
+- Inline background-task boundary for recalculation, probability, notifications, and AI jobs
 - Minimal subscription status endpoint for feature gating defaults
 
 Payment creation, verification, cancellation, payment tables, and payment webhooks are intentionally deferred.
@@ -87,13 +87,12 @@ npm install
 
 ## Local Database
 
-Prisma migration and app startup require PostgreSQL and Redis.
+Prisma migration and app startup require PostgreSQL.
 
 The default local credentials in `.env.development` are:
 
 ```text
 DATABASE_URL=postgresql://postgres:postgres@localhost:5433/vector?schema=public
-REDIS_URL=redis://localhost:6379
 ```
 
 Recommended Docker setup:
@@ -122,8 +121,6 @@ ALTER USER postgres WITH PASSWORD 'postgres';
 CREATE DATABASE vector OWNER postgres;
 \q
 ```
-
-Install/start Redis separately if you are not using Docker.
 
 If your machine already uses port `5432`, the included Docker setup maps Postgres to host port `5433`.
 

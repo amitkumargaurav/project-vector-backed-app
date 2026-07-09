@@ -52,7 +52,7 @@ export class NotificationsService {
       },
     });
     await this.worker.enqueueNotification(notification.id);
-    return notification;
+    return this.prisma.notification.findUnique({ where: { id: notification.id } }) ?? notification;
   }
 
   updatePreferences(userId: string, body: NotificationPreferencesDto) {

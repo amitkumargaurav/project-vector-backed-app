@@ -1,6 +1,5 @@
-import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { AiModule } from './ai/ai.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AuthModule } from './auth/auth.module';
@@ -29,12 +28,6 @@ const envFilePath = process.env.NODE_ENV === 'production' ? '.env.production' : 
       isGlobal: true,
       envFilePath,
       validate: validateConfig,
-    }),
-    BullModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        connection: { url: config.get<string>('REDIS_URL') },
-      }),
     }),
     CommonModule,
     PrismaModule,

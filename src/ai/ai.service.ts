@@ -32,7 +32,7 @@ export class AiService {
       },
     });
     await this.worker.enqueueAISuggestion(suggestion.id);
-    return suggestion;
+    return this.prisma.aISuggestion.findUnique({ where: { id: suggestion.id } }) ?? suggestion;
   }
 
   async getSuggestion(userId: string, suggestionId: string) {

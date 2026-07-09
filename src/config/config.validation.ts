@@ -10,7 +10,6 @@ export const configValidationSchema = z.object({
   API_PREFIX: z.string().default('api'),
   CORS_ORIGINS: z.string().default(''),
   DATABASE_URL: z.string().min(1),
-  REDIS_URL: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_REFRESH_SECRET: z.string().min(16),
   JWT_ACCESS_TTL: z.string().default('24h'),

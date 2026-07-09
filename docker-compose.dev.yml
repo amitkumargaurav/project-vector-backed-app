@@ -15,20 +15,5 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
-  redis:
-    image: redis:7-alpine
-    container_name: vector-redis-dev
-    ports:
-      - "6379:6379"
-    volumes:
-      - vector_redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
 volumes:
   vector_postgres_data:
-  vector_redis_data:
