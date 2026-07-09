@@ -56,10 +56,14 @@ export class NotificationsService {
   }
 
   updatePreferences(userId: string, body: NotificationPreferencesDto) {
+    const data = {
+      ...body,
+      goalReminderTimes: body.goalReminderTimes ? this.validGoalReminderTimes(body.goalReminderTimes) : undefined,
+    };
     return this.prisma.notificationPreference.upsert({
       where: { userId },
-      update: body,
-      create: { userId, ...body },
+      update: data,
+      create: { userId, ...data },
     });
   }
 
@@ -95,5 +99,11 @@ export class NotificationsService {
     const minutes = Number(match[2]);
     if (hours > 23 || minutes > 59) return null;
     return hours * 60 + minutes;
+  }
+
+  private validGoalReminderTimes(value: Record<string, string>) {
+    return Object.fromEntries(
+      Object.entries(value).filter(([goalId, time]) => goalId.trim() && /^([01]\d|2[0-3]):[0-5]\d$/.test(time)),
+    );
   }
 }

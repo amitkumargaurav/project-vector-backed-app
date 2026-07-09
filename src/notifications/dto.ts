@@ -1,4 +1,4 @@
-import { IsBoolean, IsInt, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsObject, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 
 export class NotificationPreferencesDto {
   @IsOptional()
@@ -24,6 +24,10 @@ export class NotificationPreferencesDto {
   @IsString()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   quietHoursEnd?: string;
+
+  @IsOptional()
+  @IsObject()
+  goalReminderTimes?: Record<string, string>;
 
   @IsOptional()
   @IsInt()

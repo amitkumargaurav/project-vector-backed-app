@@ -471,6 +471,7 @@ model NotificationPreference {
   eveningReviewTime          String?
   quietHoursStart            String?
   quietHoursEnd              String?
+  goalReminderTimes          Json     @default("{}")
   maxNotificationsPerDay     Int      @default(3)
   intelligentNudgesEnabled   Boolean  @default(true)
   createdAt                  DateTime @default(now())
