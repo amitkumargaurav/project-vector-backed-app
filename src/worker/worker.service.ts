@@ -70,7 +70,7 @@ export class WorkerService {
           { role: 'system', content: this.coachSystemPrompt() },
           {
             role: 'user',
-            content: JSON.stringify({
+            content: this.stringifyJsonSafe({
               suggestionType: this.normalizeSuggestionType(suggestion.suggestionType),
               input: suggestion.inputJson,
               priorAISuggestions: suggestionContext,
@@ -136,7 +136,7 @@ export class WorkerService {
 
   private stringPayload(payload: unknown) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
-    return Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]));
+    return Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, typeof value === 'string' ? value : this.stringifyJsonSafe(value)]));
   }
 
   private markAISuggestionFailed(suggestionId: string, reason: string) {
@@ -148,6 +148,10 @@ export class WorkerService {
 
   private errorMessage(error: unknown) {
     return error instanceof Error ? error.message : 'Unknown error';
+  }
+
+  private stringifyJsonSafe(value: unknown) {
+    return JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item));
   }
 
   private normalizeSuggestionType(type: string) {
@@ -236,6 +240,9 @@ export class WorkerService {
       'If the input is incomplete, vague, contradictory, unrealistic, or absurd, do not force a plan. Return an intake object with status needs_clarification and ask exactly one high-value follow-up question. Never ask multiple questions in one response.',
       'Use prior conversation turns and collected currentState when present. Ask the next question that most reduces planning uncertainty, such as attempt history, baseline level, graduation year, CGPA, prior score, available hours, constraints, or syllabus progress.',
       'For repeated attempts, ask about previous attempt year, score, weak subjects, and what changed. For first attempts, ask about academic background, current preparation level, graduation year, CGPA if relevant, and weekly availability.',
+      'For exam, certification, course, or syllabus-driven goals, do not create generic tasks such as "study", "practice", "revise", or "mock test" without naming the exact subject, unit, chapter, topic, paper, or question type. Every task title must include a concrete topic and a concrete action.',
+      'You do not have live web access in this integration. If the exact current syllabus, exam pattern, or topic list is missing, ask the user for the official syllabus text/link/topic list or ask for permission/context to proceed with clearly stated assumptions. Prefer asking for the syllabus over inventing it.',
+      'If a user provides syllabus topics, decompose them into day-level tasks. Each daily task must map to a specific syllabus topic or revision/mock-test activity; avoid filler tasks.',
       'When enough context is available, set intake.status to ready_to_plan and return the proposed plan. Include currentState with the facts learned and remainingUnknowns with non-blocking gaps.',
       'Use the deadline when present. Schedule every day; do not skip weekends. Do not impose a daily duration cap unless the input explicitly gives availability.',
       'Milestones are AI-assisted and optional: create as many as useful, but never force a fixed count.',
@@ -266,7 +273,15 @@ export class WorkerService {
       tracks: [{ name: 'string', nature: 'string', reason: 'string', progressWeight: 'number 0-100' }],
       milestones: [{ title: 'string', targetDate: 'ISO date or null', trackName: 'string or null' }],
       dailyPlans: [{ date: 'ISO date', focus: 'string', tasks: ['string'] }],
-      tasks: [{ title: 'string', trackName: 'string or null', scheduledDate: 'ISO date or null', priority: 'low|medium|high|critical' }],
+      tasks: [
+        {
+          title: 'specific syllabus/topic action string; never generic',
+          trackName: 'string or null',
+          scheduledDate: 'ISO date or null',
+          syllabusTopic: 'string or null',
+          priority: 'low|medium|high|critical',
+        },
+      ],
       revisionStrategy: { applies: 'boolean', cycles: [{ name: 'string', dateRange: 'string', purpose: 'string' }] },
       adjustment: { action: 'no_adjustment|propose_adjustment', reason: 'string', changes: ['string'] },
       confidence: 'number 0-1',

@@ -167,26 +167,66 @@ export class SyncService {
     const existing = await this.prisma.clientActionLog.findUnique({
       where: { userId_clientActionId: { userId, clientActionId: action.clientActionId } },
     });
-    if (existing) return { clientActionId: action.clientActionId, status: 'duplicate', result: existing.resultJson };
+    if (existing?.status === 'accepted') return { clientActionId: action.clientActionId, status: 'duplicate', result: existing.resultJson };
     try {
       const result = await this.dispatch(userId, action);
-      await this.prisma.clientActionLog.create({
-        data: {
-          userId,
-          clientActionId: action.clientActionId,
-          actionType: action.actionType ?? 'unknown',
-          status: 'accepted',
-          resultJson: result as Prisma.InputJsonValue,
-        },
-      });
+      try {
+        if (existing) {
+          await this.prisma.clientActionLog.update({
+            where: { userId_clientActionId: { userId, clientActionId: action.clientActionId } },
+            data: {
+              actionType: action.actionType ?? 'unknown',
+              status: 'accepted',
+              reason: null,
+              resultJson: result as Prisma.InputJsonValue,
+            },
+          });
+        } else {
+          await this.prisma.clientActionLog.create({
+            data: {
+              userId,
+              clientActionId: action.clientActionId,
+              actionType: action.actionType ?? 'unknown',
+              status: 'accepted',
+              resultJson: result as Prisma.InputJsonValue,
+            },
+          });
+        }
+      } catch (error) {
+        if (this.isClientActionUniqueConflict(error)) return this.duplicateActionResult(userId, action.clientActionId);
+        throw error;
+      }
       return { clientActionId: action.clientActionId, status: 'accepted', result };
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Unknown sync error';
-      await this.prisma.clientActionLog.create({
-        data: { userId, clientActionId: action.clientActionId, actionType: action.actionType ?? 'unknown', status: 'rejected', reason },
-      });
+      try {
+        if (existing) {
+          await this.prisma.clientActionLog.update({
+            where: { userId_clientActionId: { userId, clientActionId: action.clientActionId } },
+            data: { actionType: action.actionType ?? 'unknown', status: 'rejected', reason },
+          });
+        } else {
+          await this.prisma.clientActionLog.create({
+            data: { userId, clientActionId: action.clientActionId, actionType: action.actionType ?? 'unknown', status: 'rejected', reason },
+          });
+        }
+      } catch (logError) {
+        if (this.isClientActionUniqueConflict(logError)) return this.duplicateActionResult(userId, action.clientActionId);
+        throw logError;
+      }
       return { clientActionId: action.clientActionId, status: 'rejected', reason };
     }
+  }
+
+  private async duplicateActionResult(userId: string, clientActionId: string) {
+    const existing = await this.prisma.clientActionLog.findUnique({
+      where: { userId_clientActionId: { userId, clientActionId } },
+    });
+    return { clientActionId, status: 'duplicate', result: existing?.resultJson, reason: existing?.reason };
+  }
+
+  private isClientActionUniqueConflict(error: unknown) {
+    return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
   }
 
   private dispatch(userId: string, action: SyncActionDto) {
@@ -217,6 +257,7 @@ export class SyncService {
     }
     if (action.actionType === 'track.create') {
       return this.goals.createTrack(userId, String(payload.goalId), {
+        id: payload.id ? String(payload.id) : undefined,
         name: String(payload.name),
         type: payload.type ? String(payload.type) : undefined,
         targetDate: payload.targetDate ? String(payload.targetDate) : undefined,
@@ -240,6 +281,7 @@ export class SyncService {
     }
     if (action.actionType === 'task.create') {
       return this.tasks.create(userId, {
+        id: payload.id ? String(payload.id) : undefined,
         goalId: String(payload.goalId),
         trackId: payload.trackId ? String(payload.trackId) : undefined,
         title: String(payload.title),
@@ -331,6 +373,9 @@ export class SyncService {
     if (action.type === 'past_day_marked_empty' && !payload.eventType) payload.eventType = 'day.mark_empty';
     if (action.type === 'past_day_marked_skipped' && !payload.eventType) payload.eventType = 'day.mark_skipped';
     if (action.type === 'past_note_added' && !payload.eventType) payload.eventType = 'day.note';
+    if ((action.type === 'review_submitted' || action.type === 'past_review_added') && !payload.date) {
+      payload.date = payload.periodStart ?? payload.reviewDate;
+    }
     return { ...action, actionType, payload };
   }
 
@@ -341,6 +386,9 @@ export class SyncService {
       task_skipped: 'task.skip',
       task_rescheduled: 'task.reschedule',
       goal_created: 'goal.create',
+      track_created: 'track.create',
+      task_created: 'task.create',
+      task_updated: 'task.update',
       review_submitted: 'history.review.upsert',
       past_day_marked_empty: 'history.event.append',
       past_day_marked_skipped: 'history.event.append',

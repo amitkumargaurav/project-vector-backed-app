@@ -37,6 +37,14 @@ export class TasksService {
 
   async create(userId: string, dto: CreateTaskDto) {
     await this.goals.assertGoalOwner(userId, dto.goalId);
+    if (dto.id) {
+      const existing = await this.prisma.task.findUnique({ where: { id: dto.id }, include: { dependencies: true } });
+      if (existing) {
+        if (existing.goalId !== dto.goalId) throw new BadRequestException('Task id already exists for a different goal.');
+        await this.assertTaskOwner(userId, existing.id);
+        return existing;
+      }
+    }
     if (dto.trackId) {
       const track = await this.goals.assertTrackOwner(userId, dto.trackId);
       if (track.goalId !== dto.goalId) throw new BadRequestException('Track must belong to the selected goal.');
@@ -45,6 +53,7 @@ export class TasksService {
     await this.assertValidDependencies(userId, dto.goalId, dto.dependsOnTaskIds ?? []);
     const task = await this.prisma.task.create({
       data: {
+        id: dto.id,
         goalId: dto.goalId,
         trackId: dto.trackId,
         title: dto.title,

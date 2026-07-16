@@ -2,6 +2,10 @@ import { IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, Min } from 
 import { DeadlineType, TaskDifficulty, TaskPriority, TaskStatus } from '@prisma/client';
 
 export class CreateTaskDto {
+  @IsOptional()
+  @IsString()
+  id?: string;
+
   @IsString()
   goalId!: string;
 

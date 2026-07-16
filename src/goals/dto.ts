@@ -41,6 +41,10 @@ export class UpdateGoalDto {
 }
 
 export class CreateTrackDto {
+  @IsOptional()
+  @IsString()
+  id?: string;
+
   @IsString()
   name!: string;
 

@@ -82,6 +82,7 @@ export class GoalsService {
     await this.assertTrackWeightBudget(goalId, progressWeight);
     const track = await this.prisma.goalTrack.create({
       data: {
+        id: dto.id,
         goalId,
         name: dto.name,
         type: dto.type,
