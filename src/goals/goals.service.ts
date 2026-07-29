@@ -91,6 +91,7 @@ export class GoalsService {
       },
     });
     await this.revisions.record(userId, 'goal_track', track.id, 'create', track as unknown as Prisma.InputJsonValue);
+    await this.recalculateGoalProgress(userId, goalId);
     return track;
   }
 
@@ -118,13 +119,15 @@ export class GoalsService {
       },
     });
     await this.revisions.record(userId, 'goal_track', track.id, 'update', track as unknown as Prisma.InputJsonValue);
+    await this.recalculateGoalProgress(userId, existing.goalId);
     return track;
   }
 
   async setTrackStatus(userId: string, trackId: string, status: TrackStatus) {
-    await this.assertTrackOwner(userId, trackId);
+    const existing = await this.assertTrackOwner(userId, trackId);
     const track = await this.prisma.goalTrack.update({ where: { id: trackId }, data: { status } });
     await this.revisions.record(userId, 'goal_track', track.id, status, track as unknown as Prisma.InputJsonValue);
+    await this.recalculateGoalProgress(userId, existing.goalId);
     return track;
   }
 
@@ -132,7 +135,46 @@ export class GoalsService {
     await this.assertTrackOwner(userId, trackId);
     const track = await this.prisma.goalTrack.update({ where: { id: trackId }, data: { deletedAt: new Date(), status: 'archived' } });
     await this.revisions.record(userId, 'goal_track', track.id, 'delete', { id: track.id });
+    await this.recalculateGoalProgress(userId, track.goalId);
     return track;
+  }
+
+  async recalculateTrackProgress(userId: string, trackId: string) {
+    const track = await this.assertTrackOwner(userId, trackId);
+    const tasks = await this.prisma.task.findMany({
+      where: { trackId, deletedAt: null, status: { not: 'cancelled' } },
+      select: { status: true, estimatedMinutes: true },
+    });
+    const totalWeight = tasks.reduce((sum, task) => sum + this.taskProgressWeight(task.estimatedMinutes), 0);
+    const completedWeight = tasks
+      .filter((task) => task.status === 'completed')
+      .reduce((sum, task) => sum + this.taskProgressWeight(task.estimatedMinutes), 0);
+    const progress = totalWeight ? Math.round((completedWeight / totalWeight) * 10000) / 100 : 0;
+    const status = this.derivedTrackStatus(track.status, progress);
+    if (Math.abs(track.progress - progress) > 0.001 || track.status !== status) {
+      const updated = await this.prisma.goalTrack.update({ where: { id: trackId }, data: { progress, status } });
+      await this.revisions.record(userId, 'goal_track', updated.id, 'progress', updated as unknown as Prisma.InputJsonValue);
+    }
+    await this.recalculateGoalProgress(userId, track.goalId);
+  }
+
+  async recalculateGoalProgress(userId: string, goalId: string) {
+    await this.assertGoalOwner(userId, goalId);
+    const [goal, tracks] = await Promise.all([
+      this.prisma.goal.findUniqueOrThrow({ where: { id: goalId } }),
+      this.prisma.goalTrack.findMany({ where: { goalId, deletedAt: null, status: { not: 'archived' } } }),
+    ]);
+    const totalWeight = tracks.reduce((sum, track) => sum + track.progressWeight, 0);
+    const overallProgress = tracks.length
+      ? totalWeight > 0
+        ? tracks.reduce((sum, track) => sum + track.progress * track.progressWeight, 0) / totalWeight
+        : tracks.reduce((sum, track) => sum + track.progress, 0) / tracks.length
+      : 0;
+    const rounded = Math.round(overallProgress * 100) / 100;
+    if (Math.abs(goal.overallProgress - rounded) > 0.001) {
+      const updated = await this.prisma.goal.update({ where: { id: goalId }, data: { overallProgress: rounded } });
+      await this.revisions.record(userId, 'goal', updated.id, 'progress', updated as unknown as Prisma.InputJsonValue);
+    }
   }
 
   async assertGoalOwner(userId: string, goalId: string) {
@@ -155,5 +197,16 @@ export class GoalsService {
     });
     const total = tracks.reduce((sum, track) => sum + track.progressWeight, 0) + progressWeight;
     if (total > 100) throw new BadRequestException('Active track progress weights cannot exceed 100 for a goal.');
+  }
+
+  private taskProgressWeight(estimatedMinutes: number) {
+    return estimatedMinutes > 0 ? estimatedMinutes : 1;
+  }
+
+  private derivedTrackStatus(currentStatus: TrackStatus, progress: number): TrackStatus {
+    if (currentStatus === 'archived') return currentStatus;
+    if (progress >= 100) return 'completed';
+    if (currentStatus === 'completed') return 'active';
+    return currentStatus;
   }
 }

@@ -280,10 +280,11 @@ export class SyncService {
       return this.goals.deleteTrack(userId, String(payload.trackId));
     }
     if (action.actionType === 'task.create') {
+      if (!payload.trackId) throw new BadRequestException('Tasks must be linked to a focus area.');
       return this.tasks.create(userId, {
         id: payload.id ? String(payload.id) : undefined,
         goalId: String(payload.goalId),
-        trackId: payload.trackId ? String(payload.trackId) : undefined,
+        trackId: String(payload.trackId),
         title: String(payload.title),
         description: payload.description ? String(payload.description) : undefined,
         taskType: payload.taskType ? String(payload.taskType) : undefined,

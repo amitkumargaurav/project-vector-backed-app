@@ -36,19 +36,19 @@ export class TasksService {
   }
 
   async create(userId: string, dto: CreateTaskDto) {
+    if (!dto.trackId) throw new BadRequestException('Tasks must be linked to a focus area.');
     await this.goals.assertGoalOwner(userId, dto.goalId);
     if (dto.id) {
       const existing = await this.prisma.task.findUnique({ where: { id: dto.id }, include: { dependencies: true } });
       if (existing) {
         if (existing.goalId !== dto.goalId) throw new BadRequestException('Task id already exists for a different goal.');
+        if (existing.trackId !== dto.trackId) throw new BadRequestException('Task id already exists for a different focus area.');
         await this.assertTaskOwner(userId, existing.id);
         return existing;
       }
     }
-    if (dto.trackId) {
-      const track = await this.goals.assertTrackOwner(userId, dto.trackId);
-      if (track.goalId !== dto.goalId) throw new BadRequestException('Track must belong to the selected goal.');
-    }
+    const track = await this.goals.assertTrackOwner(userId, dto.trackId);
+    if (track.goalId !== dto.goalId) throw new BadRequestException('Track must belong to the selected goal.');
     if (dto.parentTaskId) await this.assertRelatedTask(userId, dto.goalId, dto.parentTaskId, 'Parent task');
     await this.assertValidDependencies(userId, dto.goalId, dto.dependsOnTaskIds ?? []);
     const task = await this.prisma.task.create({
@@ -74,6 +74,7 @@ export class TasksService {
       include: { dependencies: true },
     });
     await this.revisions.record(userId, 'task', task.id, 'create', task as unknown as Prisma.InputJsonValue);
+    await this.goals.recalculateTrackProgress(userId, dto.trackId);
     return task;
   }
 
@@ -81,6 +82,11 @@ export class TasksService {
     const task = await this.assertTaskOwner(userId, taskId);
     if (task.scheduledDate && task.scheduledDate < parseDateOnly(new Date().toISOString().slice(0, 10))) {
       throw new BadRequestException('Past tasks are append-only. Add a note, review, or late offline event instead.');
+    }
+    if (dto.trackId !== undefined) {
+      if (!dto.trackId) throw new BadRequestException('Tasks must be linked to a focus area.');
+      const track = await this.goals.assertTrackOwner(userId, dto.trackId);
+      if (track.goalId !== task.goalId) throw new BadRequestException('Track must belong to the selected goal.');
     }
     const updated = await this.prisma.task.update({
       where: { id: taskId },
@@ -99,6 +105,7 @@ export class TasksService {
       },
     });
     await this.revisions.record(userId, 'task', updated.id, 'update', updated as unknown as Prisma.InputJsonValue);
+    await this.recalculateAffectedTracks(userId, task.trackId, updated.trackId);
     return updated;
   }
 
@@ -126,6 +133,7 @@ export class TasksService {
     });
     await this.revisions.record(userId, 'task', updated.id, action, updated as unknown as Prisma.InputJsonValue);
     await this.revisions.record(userId, 'progress_event', event.id, 'create', event as unknown as Prisma.InputJsonValue);
+    if (task.trackId) await this.goals.recalculateTrackProgress(userId, task.trackId);
     await this.worker.enqueueSnapshotRecalculation(userId, formatDateOnly(event.eventDate), formatDateOnly(event.eventDate));
     await this.worker.enqueueProbabilityUpdate(userId, task.goalId);
     if (dto.clientActionId) {
@@ -152,6 +160,7 @@ export class TasksService {
       data: { scheduledDate: parseDateOnly(dto.scheduledDate), scheduledStartTime: dto.scheduledStartTime, status: 'rescheduled' },
     });
     await this.revisions.record(userId, 'task', updated.id, 'reschedule', updated as unknown as Prisma.InputJsonValue);
+    if (task.trackId) await this.goals.recalculateTrackProgress(userId, task.trackId);
     return updated;
   }
 
@@ -159,6 +168,7 @@ export class TasksService {
     const task = await this.assertTaskOwner(userId, taskId);
     const updated = await this.prisma.task.update({ where: { id: task.id }, data: { status: 'missed', missedAt: new Date() } });
     await this.revisions.record(userId, 'task', updated.id, 'missed', updated as unknown as Prisma.InputJsonValue);
+    if (task.trackId) await this.goals.recalculateTrackProgress(userId, task.trackId);
     return updated;
   }
 
@@ -193,5 +203,12 @@ export class TasksService {
       undo: { status: 'pending', startedAt: null, completedAt: null, skippedAt: null, missedAt: null },
     };
     return map[action];
+  }
+
+  private async recalculateAffectedTracks(userId: string, previousTrackId: string | null, nextTrackId: string | null) {
+    const trackIds = [...new Set([previousTrackId, nextTrackId].filter((trackId): trackId is string => Boolean(trackId)))];
+    for (const trackId of trackIds) {
+      await this.goals.recalculateTrackProgress(userId, trackId);
+    }
   }
 }

@@ -9,9 +9,8 @@ export class CreateTaskDto {
   @IsString()
   goalId!: string;
 
-  @IsOptional()
   @IsString()
-  trackId?: string;
+  trackId!: string;
 
   @IsString()
   title!: string;
