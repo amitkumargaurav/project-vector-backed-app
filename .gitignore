@@ -3,6 +3,7 @@ dist/
 coverage/
 .env
 .env.*
+!.env.production.example
 *.pdf
 *.PDF
 .idea/

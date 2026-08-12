@@ -1,0 +1,14 @@
+.git
+.idea
+.agents
+.codex
+node_modules
+dist
+coverage
+npm-debug.log
+Dockerfile
+docker-compose*.yml
+.env
+.env.*
+*.pdf
+*.PDF
