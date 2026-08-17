@@ -63,26 +63,16 @@ export class WorkerService {
     const suggestionContext = await this.buildSuggestionContext(suggestion.id, suggestion.userId, suggestion.goalId, suggestion.suggestionType, suggestion.inputJson);
     const client = new OpenAI({ apiKey });
     try {
-      const response = await client.chat.completions.create({
-        model: this.config.get<string>('OPENAI_MODEL', 'gpt-5.4-mini'),
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: this.coachSystemPrompt() },
-          {
-            role: 'user',
-            content: this.stringifyJsonSafe({
-              suggestionType: this.normalizeSuggestionType(suggestion.suggestionType),
-              input: suggestion.inputJson,
-              priorAISuggestions: suggestionContext,
-              goal,
-              requiredOutput: this.requiredOutputShape(),
-            }),
-          },
-        ],
-      });
-      const content = response.choices[0]?.message.content;
+      const requestPayload = {
+        suggestionType: this.normalizeSuggestionType(suggestion.suggestionType),
+        input: suggestion.inputJson,
+        priorAISuggestions: suggestionContext,
+        goal,
+        requiredOutput: this.requiredOutputShape(),
+      };
+      const content = await this.generateAISuggestionWithChatCompletions(client, requestPayload);
       if (!content) return this.markAISuggestionFailed(suggestionId, 'OpenAI returned an empty response.');
-      const output = JSON.parse(content) as Record<string, unknown>;
+      const output = this.parseJsonObject(content);
       return this.prisma.aISuggestion.update({
         where: { id: suggestionId },
         data: {
@@ -93,6 +83,18 @@ export class WorkerService {
     } catch (error) {
       return this.markAISuggestionFailed(suggestionId, error instanceof Error ? error.message : 'AI generation failed.');
     }
+  }
+
+  private async generateAISuggestionWithChatCompletions(client: OpenAI, requestPayload: Record<string, unknown>) {
+    const response = await client.chat.completions.create({
+      model: this.config.get<string>('OPENAI_MODEL', 'gpt-5.4-mini'),
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: this.coachSystemPrompt() },
+        { role: 'user', content: this.stringifyJsonSafe(requestPayload) },
+      ],
+    });
+    return response.choices[0]?.message.content;
   }
 
   private async sendNotification(notificationId: string) {
@@ -148,6 +150,21 @@ export class WorkerService {
 
   private errorMessage(error: unknown) {
     return error instanceof Error ? error.message : 'Unknown error';
+  }
+
+  private parseJsonObject(content: string) {
+    try {
+      return JSON.parse(content) as Record<string, unknown>;
+    } catch {
+      const fencedJson = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1];
+      if (fencedJson) return JSON.parse(fencedJson) as Record<string, unknown>;
+
+      const start = content.indexOf('{');
+      const end = content.lastIndexOf('}');
+      if (start >= 0 && end > start) return JSON.parse(content.slice(start, end + 1)) as Record<string, unknown>;
+
+      throw new Error('OpenAI returned non-JSON content.');
+    }
   }
 
   private stringifyJsonSafe(value: unknown) {
@@ -233,6 +250,7 @@ export class WorkerService {
   private coachSystemPrompt() {
     return [
       'You are an execution coach for a goal-planning app. Return only valid JSON.',
+      'You do not have live web access in this request. If the exact current syllabus, exam pattern, or topic list is missing, ask the user to open the official syllabus in the app browser, copy the full syllabus/topic list, and paste it here. Prefer user-provided official syllabus text over assumptions.',
       'The user defines what they want. First understand both the target and the user current state, then clarify the goal, identify tracks with different natures of work, and plan down to daily tasks when requested.',
       'Treat priorAISuggestions as compact conversation memory. Use it to preserve facts already learned and to continue the intake flow. Ignore prior suggestions only when they are clearly unrelated to the current goal or current user input.',
       'If priorAISuggestions contains currentState facts, carry those facts forward unless the latest input corrects them. Do not ask for a fact that is already present in currentState, the latest input, the goal, or priorAISuggestions.',
@@ -240,8 +258,11 @@ export class WorkerService {
       'If the input is incomplete, vague, contradictory, unrealistic, or absurd, do not force a plan. Return an intake object with status needs_clarification and ask exactly one high-value follow-up question. Never ask multiple questions in one response.',
       'Use prior conversation turns and collected currentState when present. Ask the next question that most reduces planning uncertainty, such as attempt history, baseline level, graduation year, CGPA, prior score, available hours, constraints, or syllabus progress.',
       'For repeated attempts, ask about previous attempt year, score, weak subjects, and what changed. For first attempts, ask about academic background, current preparation level, graduation year, CGPA if relevant, and weekly availability.',
+      'For competitive exam goals, default to a very high effort plan: set intake.currentState.availability to at least "12 hours/day" unless the user explicitly gives a lower hard constraint. If the user gives a lower constraint, acknowledge the gap and plan within it instead of silently inflating it.',
+      'For competitive exam goals, tell the user to fetch the latest official syllabus using the app browser and paste the full syllabus text here. Do not claim that you fetched the syllabus yourself.',
+      'Before returning intake.status ready_to_plan for a syllabus-driven, exam, certification, or course goal, ensure you know what the user has already completed and to what extent. Ask exactly one question about completed subjects, chapters, topics, approximate percentages, and weak/unfinished areas if that information is missing.',
+      'When the user has already completed part of the syllabus, preserve those facts in intake.currentState.baselineLevel or intake.currentState.constraints. Do not schedule completed topics as first-pass learning; use them for revision, testing, error-log work, or gap-fix tasks.',
       'For exam, certification, course, or syllabus-driven goals, do not create generic tasks such as "study", "practice", "revise", or "mock test" without naming the exact subject, unit, chapter, topic, paper, or question type. Every task title must include a concrete topic and a concrete action.',
-      'You do not have live web access in this integration. If the exact current syllabus, exam pattern, or topic list is missing, ask the user for the official syllabus text/link/topic list or ask for permission/context to proceed with clearly stated assumptions. Prefer asking for the syllabus over inventing it.',
       'If a user provides syllabus topics, decompose them into day-level tasks. Each daily task must map to a specific syllabus topic or revision/mock-test activity; avoid filler tasks.',
       'When enough context is available, set intake.status to ready_to_plan and return the proposed plan. Include currentState with the facts learned and remainingUnknowns with non-blocking gaps.',
       'Use the deadline when present. Schedule every day; do not skip weekends. Do not impose a daily duration cap unless the input explicitly gives availability.',
