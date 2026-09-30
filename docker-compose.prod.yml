@@ -1,4 +1,21 @@
 services:
+  caddy:
+    image: caddy:2.10
+    container_name: vector-backend-caddy
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      VECTOR_API_DOMAIN: ${VECTOR_API_DOMAIN:-vector-api.pathshalax.org}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
   app:
     build:
       context: .
@@ -18,3 +35,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+volumes:
+  caddy_data:
+  caddy_config:

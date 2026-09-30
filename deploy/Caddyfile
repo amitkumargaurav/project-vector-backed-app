@@ -1,0 +1,14 @@
+{$VECTOR_API_DOMAIN:vector-api.pathshalax.org} {
+	encode gzip zstd
+
+	request_body {
+		max_size 20MB
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	reverse_proxy app:3000
+}
