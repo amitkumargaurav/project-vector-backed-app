@@ -7,6 +7,19 @@ import { AnalyticsService } from '../analytics/analytics.service';
 import { parseDateOnly } from '../common/date-utils';
 import { PrismaService } from '../prisma/prisma.service';
 
+type TokenUsageCounts = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimated: boolean;
+};
+
+type AIModelCallResult = {
+  content: string | null | undefined;
+  model: string | undefined;
+  usage: TokenUsageCounts;
+};
+
 @Injectable()
 export class WorkerService {
   private readonly logger = new Logger(WorkerService.name);
@@ -51,6 +64,7 @@ export class WorkerService {
   private async generateAISuggestion(suggestionId: string) {
     const suggestion = await this.prisma.aISuggestion.findUnique({ where: { id: suggestionId } });
     if (!suggestion) return { suggestionId, status: 'skipped' };
+    if (this.isCompletedSuggestion(suggestion.outputJson)) return { suggestionId, status: 'skipped' };
     const apiKey = this.config.get<string>('OPENAI_API_KEY');
     if (!apiKey) return this.markAISuggestionFailed(suggestionId, 'OPENAI_API_KEY is not configured.');
 
@@ -70,7 +84,8 @@ export class WorkerService {
         goal,
         requiredOutput: this.requiredOutputShape(),
       };
-      const content = await this.generateAISuggestionWithChatCompletions(client, requestPayload);
+      const { content, model, usage } = await this.generateAISuggestionWithChatCompletions(client, requestPayload);
+      await this.recordAITokenUsage(suggestion, model, usage);
       if (!content) return this.markAISuggestionFailed(suggestionId, 'OpenAI returned an empty response.');
       const output = this.parseJsonObject(content);
       return this.prisma.aISuggestion.update({
@@ -85,16 +100,23 @@ export class WorkerService {
     }
   }
 
-  private async generateAISuggestionWithChatCompletions(client: OpenAI, requestPayload: Record<string, unknown>) {
+  private async generateAISuggestionWithChatCompletions(client: OpenAI, requestPayload: Record<string, unknown>): Promise<AIModelCallResult> {
+    const model = this.config.get<string>('OPENAI_MODEL', 'gpt-5.4-mini');
+    const messages = [
+      { role: 'system' as const, content: this.coachSystemPrompt() },
+      { role: 'user' as const, content: this.stringifyJsonSafe(requestPayload) },
+    ];
     const response = await client.chat.completions.create({
-      model: this.config.get<string>('OPENAI_MODEL', 'gpt-5.4-mini'),
+      model,
       response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: this.coachSystemPrompt() },
-        { role: 'user', content: this.stringifyJsonSafe(requestPayload) },
-      ],
+      messages,
     });
-    return response.choices[0]?.message.content;
+    const content = response.choices[0]?.message.content;
+    return {
+      content,
+      model: response.model ?? model,
+      usage: this.tokenUsageFromProvider(response.usage, this.stringifyJsonSafe(messages), content ?? ''),
+    };
   }
 
   private async sendNotification(notificationId: string) {
@@ -146,6 +168,78 @@ export class WorkerService {
       where: { id: suggestionId },
       data: { outputJson: { status: 'failed', reason } },
     });
+  }
+
+  private async recordAITokenUsage(
+    suggestion: { id: string; userId: string; goalId: string | null; suggestionType: string; inputJson: unknown },
+    model: string | undefined,
+    usage: TokenUsageCounts,
+  ) {
+    return this.prisma.aITokenUsageLog.create({
+      data: {
+        userId: suggestion.userId,
+        goalId: suggestion.goalId,
+        suggestionId: suggestion.id,
+        suggestionType: suggestion.suggestionType,
+        source: this.sourceFromInput(suggestion.inputJson),
+        model,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        estimated: usage.estimated,
+      },
+    });
+  }
+
+  private tokenUsageFromProvider(
+    providerUsage: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null } | null | undefined,
+    promptText: string,
+    completionText: string,
+  ): TokenUsageCounts {
+    const promptTokens = this.nonNegativeInteger(providerUsage?.prompt_tokens);
+    const completionTokens = this.nonNegativeInteger(providerUsage?.completion_tokens);
+    const totalTokens = this.nonNegativeInteger(providerUsage?.total_tokens);
+    const hasProviderUsage = Boolean(providerUsage) && (promptTokens !== undefined || completionTokens !== undefined || totalTokens !== undefined);
+    if (hasProviderUsage) {
+      const prompt = promptTokens ?? 0;
+      const completion = completionTokens ?? 0;
+      return {
+        promptTokens: prompt,
+        completionTokens: completion,
+        totalTokens: totalTokens ?? prompt + completion,
+        estimated: false,
+      };
+    }
+
+    const prompt = this.estimateTokens(promptText);
+    const completion = this.estimateTokens(completionText);
+    return {
+      promptTokens: prompt,
+      completionTokens: completion,
+      totalTokens: prompt + completion,
+      estimated: true,
+    };
+  }
+
+  private estimateTokens(text: string) {
+    if (!text) return 0;
+    return Math.ceil(text.length / 3);
+  }
+
+  private nonNegativeInteger(value: number | null | undefined) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+    return Math.max(0, Math.trunc(value));
+  }
+
+  private sourceFromInput(input: unknown) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+    const value = (input as Record<string, unknown>).source;
+    return typeof value === 'string' && value.trim() ? value : undefined;
+  }
+
+  private isCompletedSuggestion(outputJson: unknown) {
+    if (!outputJson || typeof outputJson !== 'object' || Array.isArray(outputJson)) return false;
+    return (outputJson as Record<string, unknown>).status === 'completed';
   }
 
   private errorMessage(error: unknown) {

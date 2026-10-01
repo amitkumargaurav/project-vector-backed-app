@@ -56,6 +56,11 @@ export class AiController {
     return this.ai.createSuggestion(user.id, 'blocker_analysis', body);
   }
 
+  @Get('token-usage')
+  tokenUsage(@CurrentUser() user: AuthUser) {
+    return this.ai.listTokenUsage(user.id);
+  }
+
   @Get('suggestions/:suggestionId')
   suggestion(@CurrentUser() user: AuthUser, @Param('suggestionId') suggestionId: string) {
     return this.ai.getSuggestion(user.id, suggestionId);

@@ -116,6 +116,7 @@ model User {
   privacySettings PrivacySetting?
   subscription     Subscription?
   auditLogs       AuditLog[]
+  aiTokenUsageLogs AITokenUsageLog[]
 }
 
 model UserProfile {
@@ -190,6 +191,7 @@ model Goal {
   probabilities    ProbabilitySnapshot[]
   planAdjustments  PlanAdjustment[]
   aiSuggestions    AISuggestion[]
+  aiTokenUsageLogs AITokenUsageLog[]
 
   @@index([userId, status])
 }
@@ -441,6 +443,29 @@ model AISuggestion {
   createdAt            DateTime         @default(now())
   decidedAt            DateTime?
   goal                 Goal?            @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  tokenUsageLogs       AITokenUsageLog[]
+}
+
+model AITokenUsageLog {
+  id               String        @id @default(uuid())
+  userId           String
+  goalId           String?
+  suggestionId     String?
+  suggestionType   String?
+  source           String?
+  model            String?
+  promptTokens     Int           @default(0)
+  completionTokens Int           @default(0)
+  totalTokens      Int           @default(0)
+  estimated        Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal             Goal?         @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  suggestion       AISuggestion? @relation(fields: [suggestionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([suggestionId])
+  @@index([goalId])
 }
 
 model Notification {
