@@ -1,0 +1,2 @@
+ALTER TABLE "Goal" ADD COLUMN "weeklyAvailableMinutes" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "Goal" ADD COLUMN "privacyMode" TEXT NOT NULL DEFAULT 'standard';

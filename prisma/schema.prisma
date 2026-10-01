@@ -173,6 +173,8 @@ model Goal {
   title            String
   category         String?
   deadline         DateTime?
+  weeklyAvailableMinutes Int                  @default(0)
+  privacyMode      String                     @default("standard")
   overallProgress  Float                 @default(0)
   status           GoalStatus            @default(draft)
   activeSince      DateTime?

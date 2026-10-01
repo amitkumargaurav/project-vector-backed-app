@@ -238,6 +238,8 @@ export class SyncService {
         title: String(payload.title),
         category: payload.category ? String(payload.category) : undefined,
         deadline: payload.deadline ? String(payload.deadline) : undefined,
+        weeklyAvailableMinutes: payload.weeklyAvailableMinutes === undefined ? undefined : Number(payload.weeklyAvailableMinutes),
+        privacyMode: payload.privacyMode ? String(payload.privacyMode) : undefined,
         status: payload.status as never,
       });
     }
@@ -246,6 +248,8 @@ export class SyncService {
         title: payload.title ? String(payload.title) : undefined,
         category: payload.category ? String(payload.category) : undefined,
         deadline: payload.deadline ? String(payload.deadline) : undefined,
+        weeklyAvailableMinutes: payload.weeklyAvailableMinutes === undefined ? undefined : Number(payload.weeklyAvailableMinutes),
+        privacyMode: payload.privacyMode ? String(payload.privacyMode) : undefined,
         status: payload.status as never,
       });
     }
@@ -416,8 +420,8 @@ export class SyncService {
       id: goal.id,
       title: goal.title,
       deadline: goal.deadline ? formatDateOnly(goal.deadline) : '',
-      weeklyAvailableMinutes: 0,
-      privacyMode: 'standard',
+      weeklyAvailableMinutes: goal.weeklyAvailableMinutes,
+      privacyMode: goal.privacyMode,
       progressPercentage: Math.round(goal.overallProgress),
       probabilityPercentage: Math.round(goal.probabilities[0]?.probabilityPercentage ?? 50),
       syncStatus: 'synced',

@@ -1,4 +1,4 @@
-import { IsDateString, IsEnum, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 import { GoalStatus, TrackStatus } from '@prisma/client';
 
 export class CreateGoalDto {
@@ -18,6 +18,15 @@ export class CreateGoalDto {
   deadline?: string;
 
   @IsOptional()
+  @IsInt()
+  @Min(0)
+  weeklyAvailableMinutes?: number;
+
+  @IsOptional()
+  @IsString()
+  privacyMode?: string;
+
+  @IsOptional()
   @IsEnum(GoalStatus)
   status?: GoalStatus;
 }
@@ -34,6 +43,15 @@ export class UpdateGoalDto {
   @IsOptional()
   @IsDateString()
   deadline?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  weeklyAvailableMinutes?: number;
+
+  @IsOptional()
+  @IsString()
+  privacyMode?: string;
 
   @IsOptional()
   @IsEnum(GoalStatus)

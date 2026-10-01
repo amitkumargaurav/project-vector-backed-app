@@ -19,6 +19,8 @@ export class GoalsService {
         title: dto.title,
         category: dto.category,
         deadline: dto.deadline ? new Date(dto.deadline) : undefined,
+        weeklyAvailableMinutes: dto.weeklyAvailableMinutes,
+        privacyMode: dto.privacyMode,
         status: dto.status,
         activeSince: dto.status === 'active' ? new Date() : undefined,
       },
@@ -52,6 +54,8 @@ export class GoalsService {
         title: dto.title,
         category: dto.category,
         deadline: dto.deadline ? new Date(dto.deadline) : undefined,
+        weeklyAvailableMinutes: dto.weeklyAvailableMinutes,
+        privacyMode: dto.privacyMode,
         status: dto.status,
       },
     });
