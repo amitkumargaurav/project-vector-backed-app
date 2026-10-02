@@ -65,6 +65,8 @@ openssl rand -hex 32
 From this repo:
 
 ```bash
+#load private key first
+#ssh-add "/home/amit/Documents/project vector/do_sshkey"
 npm run deploy:prod
 ```
 
